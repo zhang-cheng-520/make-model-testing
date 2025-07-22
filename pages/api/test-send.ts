@@ -1,7 +1,7 @@
 // endpoint to test sending message function
 
 import type { NextApiRequest, NextApiResponse } from "next";
-import { sendTeamsMessage } from "../../lib/messaging";
+import { NotificationService } from "../../lib/notifications";
 
 export default async function handler(
     req: NextApiRequest,
@@ -16,9 +16,16 @@ export default async function handler(
     const reason = "OpenAI model failed to respond within timeout window.";
 
     try {
-        await sendTeamsMessage(
-            `OpenAI processing failed. Make: ${make}. Model: ${model}. Capacity: ${capacity}. reason: ${reason}`
-        );
+        // await sendTeamsMessage(
+        //     `OpenAI processing failed. Make: ${make}. Model: ${model}. Capacity: ${capacity}. reason: ${reason}`
+        // );
+
+        await NotificationService.send({
+            message: `OpenAI response success. Status: 200. Make: ${make}. Model: ${model}. Capacity: ${
+                capacity ?? "N/A"
+            }`,
+            teams: undefined,
+        });
 
         console.log("✅ Teams error message sent successfully");
         res.status(200).json({ message: "Teams error message sent" });

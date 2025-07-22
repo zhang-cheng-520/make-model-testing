@@ -1,5 +1,6 @@
-// /lib/tokenManager.ts
-import { get, set } from '@vercel/edge-config';
+// lib/tokenManager.ts
+import { getEdgeValue } from './edgeConfigClient';
+import { updateEdgeConfig } from './edgeConfigWriter';
 
 interface TokenData {
   accessToken: string;
@@ -8,9 +9,9 @@ interface TokenData {
 }
 
 export async function getTokenData(): Promise<TokenData | null> {
-  return await get<TokenData>('teamsToken');
+  return await getEdgeValue<TokenData>('teamsToken');
 }
 
 export async function saveTokenData(data: TokenData): Promise<void> {
-  await set('teamsToken', data);
+  await updateEdgeConfig([{ key: 'teamsToken', value: data }]);
 }

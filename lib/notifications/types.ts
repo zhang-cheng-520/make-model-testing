@@ -1,16 +1,18 @@
 // types.ts
 export interface TeamsMessageParams {
-  teamsId: string;
-  channelId: string;
+    teamsId?: string;
+    channelId?: string;
 }
 
 export interface EmailMessageParams {
-  to: string | string[];
-  subject: string;
+    to: string | string[];
+    subject: string;
 }
 
-export interface MessageOptions {
-  message: string;
-  teams?: TeamsMessageParams;
-  email?: EmailMessageParams;
-}
+export type MessageOptions = {
+    message: string;
+} & (
+    | { teams: TeamsMessageParams; email?: never }
+    | { email: EmailMessageParams; teams?: never }
+    | { teams: TeamsMessageParams; email: EmailMessageParams }
+);

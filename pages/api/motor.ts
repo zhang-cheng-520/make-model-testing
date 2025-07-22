@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
-import { sendTeamsMessage } from "../../lib/messaging";
+import { NotificationService } from "../../lib/notifications";
 
 type ResponseData = {
     message: string;
@@ -13,6 +13,9 @@ export default async function handler(
     let make = req?.query?.make as string | undefined;
     let model = req?.query?.model as string | undefined;
     let capacity = req?.query?.capacity as string | undefined;
+
+    let teamsId = req.query?.teamsId as string | undefined;
+    let channelId = req.query?.channelId as string | undefined;
 
     if (!make || !model) {
         res.status(400).json({ message: "Make and model are required" });
@@ -84,9 +87,12 @@ export default async function handler(
         );
         res.status(200).json(outputJson);
 
-        await sendTeamsMessage(
-            `OpenAI response success. Status: ${res.statusCode}. Make: ${make}. Model: ${model}. Capacity: ${capacity ?? "N/A"}`
-        );
+        await NotificationService.send({
+            message: `OpenAI response success. Status: 200. Make: ${make}. Model: ${model}. Capacity: ${
+                capacity ?? "N/A"
+            }`,
+            teams: teamsId && channelId ? { teamsId, channelId } : undefined,
+        });
 
         console.log("Teams message sent with OpenAI response");
     } catch (error) {
@@ -97,11 +103,16 @@ export default async function handler(
 
         res.status(statusCode).json({ message: reason });
         try {
-            await sendTeamsMessage(
-                `OpenAI response Failure. Status: ${res.statusCode}. Make: ${make}. Model: ${model}. Capacity: ${capacity ?? "N/A"}. Error: ${reason}`
-            );
+            await NotificationService.send({
+                message: `❌ OpenAI Failure | Status: ${statusCode} | Make: ${make || "N/A"
+                } | Model: ${model || "N/A"} | Error: ${reason}`,
+                teams: teamsId && channelId ? { teamsId, channelId } : undefined,
+            });
         } catch (teamsErr: any) {
-            console.error("Failed to send Teams error log:", teamsErr.message || teamsErr);
+            console.error(
+                "Failed to send Teams error log:",
+                teamsErr.message || teamsErr
+            );
         }
     }
 }
