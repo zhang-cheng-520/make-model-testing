@@ -1,0 +1,8 @@
+.env
+/node_modules
+/.next
+/.vercel
+/.vscode
+/.idea
+/.DS_Store
+tokens.json
