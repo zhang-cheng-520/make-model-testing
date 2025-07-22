@@ -7,11 +7,11 @@ interface EdgeConfigWriteItem {
 
 export async function updateEdgeConfig(items: EdgeConfigWriteItem[]) {
   const EDGE_CONFIG_ID = process.env.EDGE_CONFIG_ID;
-  const VERCEL_TOKEN = process.env.VERCEL_ACCESS_TOKEN;
+  const VERCEL_TOKEN = process.env.VERCEL_EDGE_CONFIG_TOKEN;
   const TEAM_ID = process.env.VERCEL_TEAM_ID; // optional
 
   if (!EDGE_CONFIG_ID || !VERCEL_TOKEN) {
-    throw new Error('Missing EDGE_CONFIG_ID or VERCEL_ACCESS_TOKEN in env');
+    throw new Error('Missing EDGE_CONFIG_ID or VERCEL_EDGE_CONFIG_TOKEN in env');
   }
 
   const url = `https://api.vercel.com/v1/edge-config/${EDGE_CONFIG_ID}/items${
