@@ -17,7 +17,9 @@ export const NotificationService = {
   async sendTeamsMessage(options: MessageOptions) {
     const teamsId = options.teams?.teamsId ?? process.env.DEFAULT_TEAMS_ID!;
     const channelId = options.teams?.channelId ?? process.env.DEFAULT_CHANNEL_ID!;
-
+    console.log(teamsId)
+    console.log(channelId)
+    console.log("Test")
     if (!teamsId || !channelId) {
       throw new Error("Missing teamsId or channelId and no default is set");
     }

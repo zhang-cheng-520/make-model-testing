@@ -1,36 +1,49 @@
 // lib/edgeConfigWriter.ts
-
-interface EdgeConfigWriteItem {
+interface EdgeConfigWriteOperation {
+  operation: 'upsert' | 'delete';
   key: string;
-  value: any;
+  value?: any;
 }
 
-export async function updateEdgeConfig(items: EdgeConfigWriteItem[]) {
-  const EDGE_CONFIG_ID = process.env.EDGE_CONFIG_ID;
-  const VERCEL_TOKEN = process.env.VERCEL_EDGE_CONFIG_TOKEN;
-  const TEAM_ID = process.env.VERCEL_TEAM_ID; // optional
 
-  if (!EDGE_CONFIG_ID || !VERCEL_TOKEN) {
-    throw new Error('Missing EDGE_CONFIG_ID or VERCEL_EDGE_CONFIG_TOKEN in env');
+export async function updateEdgeConfig(
+  operations: EdgeConfigWriteOperation[]
+): Promise<void> {
+  // Validate environment variables
+  if (!process.env.EDGE_CONFIG_ID || !process.env.VERCEL_ACCESS_TOKEN) {
+    throw new Error(
+      'Missing required env vars: EDGE_CONFIG_ID and VERCEL_ACCESS_TOKEN'
+    );
   }
 
-  const url = `https://api.vercel.com/v1/edge-config/${EDGE_CONFIG_ID}/items${
-    TEAM_ID ? `?teamId=${TEAM_ID}` : ''
-  }`;
+  const API_URL = `https://api.vercel.com/v1/edge-config/${process.env.EDGE_CONFIG_ID}/items`;
 
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${VERCEL_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ items }),
-  });
+  try {
+    const response = await fetch(API_URL, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${process.env.VERCEL_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ items: operations }),
+    });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Failed to update Edge Config: ${err}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      console.error('Edge Config API Error:', {
+        status: response.status,
+        configId: process.env.EDGE_CONFIG_ID,
+        operations,
+        error,
+      });
+      throw new Error(
+        `Edge Config update failed (HTTP ${response.status}): ${error.message || 'No error details'}`
+      );
+    }
+
+    console.log('✅ Edge Config updated successfully');
+  } catch (error) {
+    console.error('Critical Edge Config Error:', error);
+    throw error; // Re-throw for caller handling
   }
-
-  return await response.json();
 }

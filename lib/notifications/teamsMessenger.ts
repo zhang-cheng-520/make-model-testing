@@ -65,7 +65,8 @@ export class TeamsMessenger {
     public async send({ teams, message }: MessageOptions): Promise<void> {
         const teamsId = teams.teamsId 
         const channelId = teams.channelId
-
+        console.log("TeamsID" ,teamsId)
+        console.log("ChannelId " ,channelId)
         await axios.post(
             `https://graph.microsoft.com/v1.0/teams/${teamsId}/channels/${channelId}/messages`,
             { body: { contentType: "html", content: message } },

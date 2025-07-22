@@ -9,22 +9,18 @@ export default async function handler(
 ) {
     console.log("🔍 API route hit: /api/test-send");
 
-    // Mock values to simulate a failed OpenAI call
     const make = "Nissan";
     const model = "Skyline";
     const capacity = "2500cc";
     const reason = "OpenAI model failed to respond within timeout window.";
 
     try {
-        // await sendTeamsMessage(
-        //     `OpenAI processing failed. Make: ${make}. Model: ${model}. Capacity: ${capacity}. reason: ${reason}`
-        // );
-
+        console.log('api')
         await NotificationService.send({
             message: `OpenAI response success. Status: 200. Make: ${make}. Model: ${model}. Capacity: ${
                 capacity ?? "N/A"
             }`,
-            teams: undefined,
+            teams: { teamsId:process.env.DEFAULT_TEAMS_ID ,channelId:process.env.DEFAULT_CHANNEL_ID},
         });
 
         console.log("✅ Teams error message sent successfully");
