@@ -2,7 +2,8 @@
 import { createClient } from '@vercel/edge-config';
 
 const CONNECTION_STRING =
-  'ecfg_zdtspifap2vajlkj5lsxiocrnhyv?token=0e164c4f-b849-4967-bdf5-18da7305d6e4';
+    'https://edge-config.vercel.com/ecfg_zdtspifap2vajlkj5lsxiocrnhyv?token=0e164c4f-b849-4967-bdf5-18da7305d6e4';
+
 
 function validateConnectionString(str: string) {
   if (!str.includes('ecfg_') || !str.includes('?token=')) {
