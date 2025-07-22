@@ -1,28 +1,33 @@
-// pages/api/test-token-flow.ts
-import { getTokenData, saveTokenData } from '../../lib/tokenManager';
+// pages/api/test-write.ts
+import { saveTokenData, getTokenData } from '../../lib/tokenManager';
 
 export default async function handler(req, res) {
   try {
-    // Test save
-    await saveTokenData({
-      accessToken: 'ddd' + Date.now(),
-      refreshToken: 'ddd' + Date.now(),
-      expiresAt: Math.floor(Date.now() / 1000) + 3600,
-    });
+    if (req.method === 'POST') {
+      const { accessToken, refreshToken, expiresAt } = req.body;
 
-    // Test retrieval
-    const tokens = await getTokenData();
+      if (!accessToken || !refreshToken || !expiresAt) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: accessToken, refreshToken, expiresAt',
+        });
+      }
 
-    res.status(200).json({
-      success: true,
-      tokens: {
-        ...tokens,
-        accessToken: tokens?.accessToken?.slice(0, 5) + '...',
-        refreshToken: tokens?.refreshToken?.slice(0, 5) + '...',
-      },
-    });
+      await saveTokenData({
+        accessToken,
+        refreshToken,
+        expiresAt,
+      });
+
+      return res.status(200).json({ success: true, message: 'Token saved.' });
+    } else if (req.method === 'GET') {
+      const tokenData = await getTokenData();
+      return res.status(200).json({ success: true, tokenData });
+    } else {
+      return res.status(405).json({ success: false, error: 'Method not allowed' });
+    }
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message,
     });

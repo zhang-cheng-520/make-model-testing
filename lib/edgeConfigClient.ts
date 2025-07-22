@@ -1,12 +1,14 @@
 // lib/edgeConfigClient.ts
 import { createClient } from '@vercel/edge-config';
 
-const CONNECTION_STRING = "ecfg_zdtspifap2vajlkj5lsxiocrnhyv?token=70f39dde-3f0a-46ca-9e5b-7290a9825ac5";
+const CONNECTION_STRING =
+  'ecfg_zdtspifap2vajlkj5lsxiocrnhyv?token=0e164c4f-b849-4967-bdf5-18da7305d6e4';
 
-// More lenient validation
 function validateConnectionString(str: string) {
   if (!str.includes('ecfg_') || !str.includes('?token=')) {
-    throw new Error(`Invalid Edge Config format. Must contain 'ecfg_' and '?token='`);
+    throw new Error(
+      `Invalid Edge Config format. Must contain 'ecfg_' and '?token='`
+    );
   }
 }
 
@@ -14,19 +16,32 @@ async function initializeEdgeConfig() {
   try {
     validateConnectionString(CONNECTION_STRING);
     const client = createClient(CONNECTION_STRING);
-    
-    // Quick test query
+
+    // Quick test
     await client.get('teamsToken');
     console.log('✅ Edge Config client initialized');
     return client;
   } catch (error) {
     console.error('⚠️ Official Edge Config client failed, using fallback');
+
+    const fallbackUrl = `https://edge-config.vercel.com/${CONNECTION_STRING}`;
     return {
       get: async <T>(key: string): Promise<T | null> => {
-        const res = await fetch(`https://edge-config.vercel.com/${CONNECTION_STRING}`);
-        const data = await res.json();
-        return data.items[key] || null;
-      }
+        try {
+          const res = await fetch(fallbackUrl);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+
+          if (data?.items && Object.prototype.hasOwnProperty.call(data.items, key)) {
+            return data.items[key] as T;
+          }
+
+          return null;
+        } catch (err) {
+          console.error(`Fallback fetch failed for key "${key}"`, err);
+          return null;
+        }
+      },
     };
   }
 }

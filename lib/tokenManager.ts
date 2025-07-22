@@ -8,83 +8,64 @@ export interface TokenData {
   expiresAt: number; // Unix timestamp (seconds)
 }
 
-// Local storage fallback for critical failures
-const localStorageFallback = {
-  get: (): TokenData | null => {
-    try {
-      const data = localStorage.getItem('teamsTokenBackup');
-      return data ? JSON.parse(data) : null;
-    } catch {
-      return null;
-    }
-  },
-  set: (data: TokenData) => {
-    try {
-      localStorage.setItem('teamsTokenBackup', JSON.stringify(data));
-    } catch (error) {
-      console.error('LocalStorage fallback failed:', error);
-    }
+// In-memory fallback for server environment
+let inMemoryFallbackToken: TokenData | null = null;
+
+const fallbackStore = {
+  get: (): TokenData | null => inMemoryFallbackToken,
+  set: (data: TokenData | null) => {
+    inMemoryFallbackToken = data;
   },
 };
 
 /**
- * Retrieves token data with fallback handling
+ * Retrieve token data, falling back if Edge Config is unavailable
  */
 export async function getTokenData(): Promise<TokenData | null> {
   try {
-    // Try Edge Config first
     const edgeData = await getEdgeValue<TokenData>('teamsToken');
     if (edgeData) return edgeData;
-
-    // Fallback to localStorage
-    return localStorageFallback.get();
+    return fallbackStore.get();
   } catch (error) {
     console.error('Token retrieval failed:', error);
-    return localStorageFallback.get();
+    return fallbackStore.get();
   }
 }
 
 /**
- * Saves token data with validation and fallback
+ * Save token data, validating structure and falling back on failure
  */
 export async function saveTokenData(data: TokenData): Promise<void> {
-  // Validate token structure
   if (
     !data?.accessToken ||
     !data?.refreshToken ||
     !data?.expiresAt ||
     data.expiresAt < Math.floor(Date.now() / 1000)
   ) {
-    throw new Error('Invalid token data format or expired token');
+    throw new Error('Invalid token data or expired token');
   }
 
   try {
-    // Primary save to Edge Config
     await updateEdgeConfig([
       {
         operation: 'upsert',
         key: 'teamsToken',
         value: {
           ...data,
-          // Ensure minimum 5 minute expiry
-          expiresAt: Math.max(
-            data.expiresAt,
-            Math.floor(Date.now() / 1000) + 300
-          ),
+          // Ensure minimum 5 minutes expiry from now
+          expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300),
         },
       },
     ]);
   } catch (error) {
     console.error('Primary token save failed, using fallback:', error);
-    localStorageFallback.set(data);
-    throw new Error(
-      'Failed to save token to Edge Config. Using local fallback.'
-    );
+    fallbackStore.set(data);
+    throw new Error('Failed to save token to Edge Config; fallback used');
   }
 }
 
 /**
- * Emergency token cleanup
+ * Clear token data from Edge Config and fallback store
  */
 export async function clearTokens(): Promise<void> {
   try {
@@ -92,5 +73,5 @@ export async function clearTokens(): Promise<void> {
   } catch (error) {
     console.error('Failed to clear Edge Config tokens:', error);
   }
-  localStorageFallback.set(null);
+  fallbackStore.set(null);
 }
