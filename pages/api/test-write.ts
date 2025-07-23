@@ -1,5 +1,6 @@
 // pages/api/test-write.ts
 import { saveTokenData, getTokenData } from '../../lib/tokenManager';
+import { getEdgeValue } from '../../lib/edgeConfigClient';
 
 export default async function handler(req, res) {
   try {
@@ -21,8 +22,31 @@ export default async function handler(req, res) {
 
       return res.status(200).json({ success: true, message: 'Token saved.' });
     } else if (req.method === 'GET') {
-      const tokenData = await getTokenData();
-      return res.status(200).json({ success: true, tokenData });
+      // Get current token data (from cache or edge config)
+      const currentData = await getTokenData();
+
+      if (!currentData) {
+        return res.status(404).json({ success: false, error: 'No token data found' });
+      }
+
+      // Update expiresAt to new future timestamp (e.g., +10 mins)
+      const updatedData = {
+        ...currentData,
+        expiresAt: Math.floor(Date.now() / 1000) + 600, // 10 minutes from now
+      };
+
+      // Save updated data back (this updates edge config and cache)
+      await saveTokenData(updatedData);
+
+      // Fetch fresh value directly from edge config to compare
+      const edgeConfigData = await getEdgeValue('teamsToken');
+
+      return res.status(200).json({
+        success: true,
+        updatedExpiresAt: updatedData.expiresAt,
+        edgeConfigData,
+        cachedData: updatedData,
+      });
     } else {
       return res.status(405).json({ success: false, error: 'Method not allowed' });
     }

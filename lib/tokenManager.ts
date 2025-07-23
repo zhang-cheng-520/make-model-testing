@@ -1,4 +1,3 @@
-// lib/tokenManager.ts
 import { getEdgeValue } from './edgeConfigClient';
 import { updateEdgeConfig } from './edgeConfigWriter';
 
@@ -8,32 +7,37 @@ export interface TokenData {
   expiresAt: number; // Unix timestamp (seconds)
 }
 
-// In-memory fallback for server environment
-let inMemoryFallbackToken: TokenData | null = null;
-
-const fallbackStore = {
-  get: (): TokenData | null => inMemoryFallbackToken,
-  set: (data: TokenData | null) => {
-    inMemoryFallbackToken = data;
-  },
-};
+// In-memory cache for token data
+let cachedTokenData: TokenData | null = null;
 
 /**
- * Retrieve token data, falling back if Edge Config is unavailable
+ * Retrieve token data, using in-memory cache if valid,
+ * otherwise fetch from Edge Config and update cache
  */
 export async function getTokenData(): Promise<TokenData | null> {
+  const now = Math.floor(Date.now() / 1000);
+
+  // Return cached token if it exists and is still valid (not expired)
+  if (cachedTokenData && cachedTokenData.expiresAt > now) {
+    return cachedTokenData;
+  }
+
   try {
     const edgeData = await getEdgeValue<TokenData>('teamsToken');
-    if (edgeData) return edgeData;
-    return fallbackStore.get();
+    if (edgeData && edgeData.expiresAt > now) {
+      cachedTokenData = edgeData; // Update cache
+      return edgeData;
+    }
   } catch (error) {
-    console.error('Token retrieval failed:', error);
-    return fallbackStore.get();
+    console.error('Token retrieval from Edge Config failed:', error);
   }
+
+  // Return cached token even if expired or null if no cache
+  return cachedTokenData;
 }
 
 /**
- * Save token data, validating structure and falling back on failure
+ * Save token data to Edge Config and update in-memory cache
  */
 export async function saveTokenData(data: TokenData): Promise<void> {
   if (
@@ -57,15 +61,17 @@ export async function saveTokenData(data: TokenData): Promise<void> {
         },
       },
     ]);
+    // Update cache immediately after successful save
+    cachedTokenData = data;
   } catch (error) {
     console.error('Primary token save failed, using fallback:', error);
-    fallbackStore.set(data);
+    cachedTokenData = data; // fallback cache update
     throw new Error('Failed to save token to Edge Config; fallback used');
   }
 }
 
 /**
- * Clear token data from Edge Config and fallback store
+ * Clear token data from Edge Config and in-memory cache
  */
 export async function clearTokens(): Promise<void> {
   try {
@@ -73,5 +79,5 @@ export async function clearTokens(): Promise<void> {
   } catch (error) {
     console.error('Failed to clear Edge Config tokens:', error);
   }
-  fallbackStore.set(null);
+  cachedTokenData = null;
 }
