@@ -1,8 +1,7 @@
 // lib/edgeConfigClient.ts
 import { createClient } from '@vercel/edge-config';
 
-const CONNECTION_STRING =
-    'https://edge-config.vercel.com/ecfg_zdtspifap2vajlkj5lsxiocrnhyv?token=0e164c4f-b849-4967-bdf5-18da7305d6e4';
+const CONNECTION_STRING = process.env.CONNECTION_STRING
 
 
 function validateConnectionString(str: string) {
@@ -18,8 +17,7 @@ async function initializeEdgeConfig() {
     validateConnectionString(CONNECTION_STRING);
     const client = createClient(CONNECTION_STRING);
 
-    // Quick test
-    await client.get('teamsToken');
+    await client.get('teamsToken'); // Quick test
     console.log('✅ Edge Config client initialized');
     return client;
   } catch (error) {
@@ -49,6 +47,7 @@ async function initializeEdgeConfig() {
 
 const edgeConfig = initializeEdgeConfig();
 
+// Generic function to get values from Edge Config, specify the key and datatype
 export async function getEdgeValue<T>(key: string): Promise<T | null> {
   return (await edgeConfig).get(key);
 }

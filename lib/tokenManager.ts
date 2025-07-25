@@ -1,44 +1,59 @@
-import { getEdgeValue } from './edgeConfigClient';
-import { updateEdgeConfig } from './edgeConfigWriter';
+// lib/tokenManager.ts
+import axios from 'axios';
+import { getEdgeValue } from './services/edgeConfigClient';
+import { updateEdgeConfig } from './services/edgeConfigWriter';
 
 export interface TokenData {
   accessToken: string;
   refreshToken: string;
-  expiresAt: number; // Unix timestamp (seconds)
+  expiresAt: number;
 }
 
-// In-memory cache for token data
 let cachedTokenData: TokenData | null = null;
 
-/**
- * Retrieve token data, using in-memory cache if valid,
- * otherwise fetch from Edge Config and update cache
- */
 export async function getTokenData(): Promise<TokenData | null> {
   const now = Math.floor(Date.now() / 1000);
 
-  // Return cached token if it exists and is still valid (not expired)
-  if (cachedTokenData && cachedTokenData.expiresAt > now) {
-    return cachedTokenData;
-  }
-
-  try {
-    const edgeData = await getEdgeValue<TokenData>('teamsToken');
-    if (edgeData && edgeData.expiresAt > now) {
-      cachedTokenData = edgeData; // Update cache
-      return edgeData;
+  if (!cachedTokenData) {
+    try {
+      const edgeData = await getEdgeValue<TokenData>('teamsToken');
+      if (edgeData) cachedTokenData = edgeData;
+    } catch (error) {
+      console.error('Token retrieval from Edge Config failed:', error);
     }
-  } catch (error) {
-    console.error('Token retrieval from Edge Config failed:', error);
   }
 
-  // Return cached token even if expired or null if no cache
   return cachedTokenData;
 }
 
-/**
- * Save token data to Edge Config and update in-memory cache
- */
+export async function refreshAccessToken(oldRefreshToken: string): Promise<TokenData> {
+  if (!oldRefreshToken) {
+    throw new Error('No refresh token available');
+  }
+
+  const response = await axios.post(
+    `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/token`,
+    new URLSearchParams({
+      client_id: process.env.CLIENT_ID!,
+      client_secret: process.env.CLIENT_SECRET!,
+      grant_type: 'refresh_token',
+      refresh_token: oldRefreshToken,
+      redirect_uri: process.env.REDIRECT_URI!,
+      scope: 'ChannelMessage.Send Chat.ReadWrite offline_access',
+    })
+  );
+  console.log(response.data)
+
+  const newTokenData: TokenData = {
+    accessToken: response.data.access_token,
+    refreshToken: response.data.refresh_token,
+    expiresAt: Math.floor(Date.now() / 1000) + 89 * 24 * 60 * 60, // 89 days (default setting of 90 days in Azure)
+  };
+
+  await saveTokenData(newTokenData); // Updates Edge Config and cache
+  return newTokenData;
+}
+
 export async function saveTokenData(data: TokenData): Promise<void> {
   if (
     !data?.accessToken ||
@@ -56,23 +71,18 @@ export async function saveTokenData(data: TokenData): Promise<void> {
         key: 'teamsToken',
         value: {
           ...data,
-          // Ensure minimum 5 minutes expiry from now
-          expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300),
+          expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300), // ensure minimum 5 min expiry
         },
       },
     ]);
-    // Update cache immediately after successful save
     cachedTokenData = data;
   } catch (error) {
     console.error('Primary token save failed, using fallback:', error);
-    cachedTokenData = data; // fallback cache update
+    cachedTokenData = data;
     throw new Error('Failed to save token to Edge Config; fallback used');
   }
 }
 
-/**
- * Clear token data from Edge Config and in-memory cache
- */
 export async function clearTokens(): Promise<void> {
   try {
     await updateEdgeConfig([{ operation: 'delete', key: 'teamsToken' }]);

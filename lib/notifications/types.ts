@@ -1,4 +1,4 @@
-// types.ts
+//lib/notification/types.ts
 export interface TeamsMessageParams {
     teamsId?: string;
     channelId?: string;
