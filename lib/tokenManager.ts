@@ -71,7 +71,7 @@ export async function saveTokenData(data: TokenData): Promise<void> {
         key: 'teamsToken',
         value: {
           ...data,
-          expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300), // ensure minimum 5 min expiry
+          // expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300),
         },
       },
     ]);
