@@ -1,0 +1,53 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import crypto from "crypto";
+
+const UIPATH_WEBHOOK_SECRET = process.env.UIPATH_WEBHOOK_SECRET || "SuperSecret?";
+const MAESTRO_URL = "https://cloud.uipath.com/ecicspxytrvx/DefaultTenant/orchestrator_/t/38952a63-0708-4971-8831-cf84d5dbe7d9/rpaBPMN";
+const UIPATH_BEARER = process.env.UIPATH_BEARER_TOKEN
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    // Validate signature
+    const rawBody = JSON.stringify(req.body);
+    const signature = req.headers["x-uipath-signature"] as string;
+    const hmac = crypto.createHmac("sha256", UIPATH_WEBHOOK_SECRET);
+    hmac.update(rawBody);
+    const computedSignature = hmac.digest("base64");
+
+    if (!signature || !crypto.timingSafeEqual(Buffer.from(computedSignature), Buffer.from(signature))) {
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
+    // ✅ Extract pol_number from webhook payload
+    const pol_number = req.body?.InputArguments?.pol_number || req.body?.SpecificContent?.pol_number;
+
+    if (!pol_number) {
+      console.warn("pol_number not found in webhook payload:", req.body);
+      return res.status(400).json({ error: "Missing pol_number" });
+    }
+
+    // 🔄 Forward to Maestro BPMN API Trigger
+    const forwardRes = await fetch(MAESTRO_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${UIPATH_BEARER}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pol_number }),
+    });
+
+    const data = await forwardRes.json();
+
+    console.log("Forwarded to Maestro:", data);
+
+    return res.status(200).json({ message: "Webhook processed", maestroResponse: data });
+
+  } catch (err: any) {
+    console.error("Webhook error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
