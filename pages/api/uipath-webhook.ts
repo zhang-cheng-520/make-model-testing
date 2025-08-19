@@ -6,7 +6,7 @@ const UIPATH_BEARER = process.env.UIPATH_BEARER_TOKEN;
 
 export const config = {
   api: {
-    bodyParser: true, // ✅ Next.js parses JSON automatically
+    bodyParser: true, // ✅ Let Next.js parse JSON automatically
   },
 };
 
@@ -18,14 +18,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const body = req.body;
     console.log("📩 Webhook payload received:", body);
-    console.log("DEBUG full payload:", JSON.stringify(body, null, 2));
 
+    // ✅ Extract pol_number
+    let pol_number: string | undefined;
 
-    // Extract pol_number
-    const pol_number = body?.QueueItem?.SpecificContent?.pol_number;
+    if (body?.QueueItems?.length > 0) {
+      pol_number = body.QueueItems[0].SpecificContent?.pol_number;
+    } else if (body?.QueueItem) {
+      pol_number = body.QueueItem.SpecificContent?.pol_number;
+    } else {
+      pol_number =
+        body?.SpecificContent?.pol_number || body?.InputArguments?.pol_number;
+    }
 
     if (!pol_number) {
-      console.warn("⚠️ pol_number not found in payload:", body);
+      console.warn(
+        "⚠️ pol_number not found, dumping SpecificContent:",
+        body.QueueItems?.[0]?.SpecificContent
+      );
       return res.status(400).json({ error: "Missing pol_number" });
     }
 
@@ -36,7 +46,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "Content-Type": "application/json",
         ...(UIPATH_BEARER ? { Authorization: `Bearer ${UIPATH_BEARER}` } : {}),
       },
-      body: JSON.stringify({ pol_number, ...body.QueueItem.SpecificContent }),
+      body: JSON.stringify({
+        pol_number,
+        ...body.QueueItems?.[0]?.SpecificContent,
+      }),
     });
 
     let maestroResponse: any;
