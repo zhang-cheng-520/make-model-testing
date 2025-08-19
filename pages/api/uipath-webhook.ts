@@ -2,10 +2,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 const MAESTRO_URL = process.env.MAESTRO_URL!;
+const UIPATH_BEARER = process.env.UIPATH_BEARER_TOKEN;
 
 export const config = {
   api: {
-    bodyParser: true, // ✅ let Next.js parse JSON automatically
+    bodyParser: true, // ✅ Next.js parses JSON automatically
   },
 };
 
@@ -16,17 +17,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const body = req.body;
-    console.log("📩 Webhook payload:", body);
+    console.log("📩 Webhook payload received:", body);
 
-    let pol_number: string | undefined;
-
-    if (body?.QueueItem) {
-      pol_number = body.QueueItem.SpecificContent?.pol_number;
-    } else if (body?.QueueItems?.length > 0) {
-      pol_number = body.QueueItems[0]?.SpecificContent?.pol_number;
-    } else {
-      pol_number = body?.SpecificContent?.pol_number || body?.InputArguments?.pol_number;
-    }
+    // Extract pol_number
+    const pol_number = body?.QueueItem?.SpecificContent?.pol_number;
 
     if (!pol_number) {
       console.warn("⚠️ pol_number not found in payload:", body);
@@ -36,8 +30,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 🔄 Forward to Maestro
     const forwardRes = await fetch(MAESTRO_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pol_number }),
+      headers: {
+        "Content-Type": "application/json",
+        ...(UIPATH_BEARER ? { Authorization: `Bearer ${UIPATH_BEARER}` } : {}),
+      },
+      body: JSON.stringify({ pol_number, ...body.QueueItem.SpecificContent }),
     });
 
     let maestroResponse: any;
@@ -47,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       maestroResponse = await forwardRes.text();
     }
 
-    console.log("✅ Forwarded to Maestro:", pol_number);
+    console.log("✅ Forwarded to Maestro with pol_number:", pol_number);
 
     return res.status(200).json({
       message: "Webhook processed",
