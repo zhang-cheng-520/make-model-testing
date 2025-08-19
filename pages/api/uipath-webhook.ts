@@ -6,7 +6,7 @@ const UIPATH_BEARER = process.env.UIPATH_BEARER_TOKEN;
 
 export const config = {
   api: {
-    bodyParser: true, // ✅ Next.js parses JSON automatically
+    bodyParser: true,
   },
 };
 
@@ -19,8 +19,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = req.body;
     console.log("📩 Webhook payload received:", body);
 
-    // Extract pol_number
-    const pol_number = body?.QueueItem?.SpecificContent?.pol_number;
+    // ✅ Extract pol_number
+    let pol_number: string | undefined;
+    if (body?.QueueItems?.length > 0) {
+      pol_number = body.QueueItems[0]?.SpecificContent?.pol_number;
+    } else if (body?.QueueItem) {
+      pol_number = body.QueueItem?.SpecificContent?.pol_number;
+    }
 
     if (!pol_number) {
       console.warn("⚠️ pol_number not found in payload:", body);
@@ -34,7 +39,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "Content-Type": "application/json",
         ...(UIPATH_BEARER ? { Authorization: `Bearer ${UIPATH_BEARER}` } : {}),
       },
-      body: JSON.stringify({ pol_number, ...body.QueueItem.SpecificContent }),
+      body: JSON.stringify({
+        pol_number,
+        ...body.QueueItems?.[0]?.SpecificContent,
+      }),
     });
 
     let maestroResponse: any;
