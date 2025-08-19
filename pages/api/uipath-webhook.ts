@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "Content-Type": "application/json",
         ...(UIPATH_BEARER ? { Authorization: `Bearer ${UIPATH_BEARER}` } : {}),
       },
-      body: JSON.stringify({ pol_number, ...body.QueueItems[0].SpecificContent }),
+      body: JSON.stringify({ pol_number}),
     });
 
     let maestroResponse: any;
