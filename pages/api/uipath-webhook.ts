@@ -1,22 +1,11 @@
+// pages/api/uipath-webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import crypto from "crypto";
 
-// Secrets and tokens
-const UIPATH_WEBHOOK_SECRET = process.env.UIPATH_WEBHOOK_SECRET || "SuperSecret?";
-const MAESTRO_URL = process.env.MAESTRO_URL!; // 👈 put Maestro endpoint in env
-const UIPATH_BEARER = process.env.UIPATH_BEARER_TOKEN;
-
-async function getRawBody(req: any): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
+const MAESTRO_URL = process.env.MAESTRO_URL!;
 
 export const config = {
   api: {
-    bodyParser: false, // 👈 needed for HMAC validation
+    bodyParser: true, // ✅ let Next.js parse JSON automatically
   },
 };
 
@@ -26,55 +15,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // ✅ Get raw body
-    const rawBody = await getRawBody(req);
+    const body = req.body;
+    console.log("📩 Webhook payload:", body);
 
-    // ✅ Verify signature from UiPath
-    const signature = req.headers["x-uipath-signature"] as string;
-    if (!signature) {
-      return res.status(401).json({ error: "Missing signature" });
-    }
-
-    const hmac = crypto.createHmac("sha256", UIPATH_WEBHOOK_SECRET);
-    hmac.update(rawBody);
-    const computedSignature = hmac.digest("base64");
-
-    const sigBuf = Buffer.from(signature);
-    const compBuf = Buffer.from(computedSignature);
-    if (
-      sigBuf.length !== compBuf.length ||
-      !crypto.timingSafeEqual(sigBuf, compBuf)
-    ) {
-      return res.status(401).json({ error: "Invalid signature" });
-    }
-
-    // ✅ Parse JSON AFTER validation
-    const body = JSON.parse(rawBody);
-
-    // ✅ Extract pol_number safely
     let pol_number: string | undefined;
+
     if (body?.QueueItem) {
-      pol_number = body.QueueItem?.SpecificContent?.pol_number;
-      console.log(pol_number)
+      pol_number = body.QueueItem.SpecificContent?.pol_number;
     } else if (body?.QueueItems?.length > 0) {
       pol_number = body.QueueItems[0]?.SpecificContent?.pol_number;
     } else {
-      pol_number =
-        body?.SpecificContent?.pol_number || body?.InputArguments?.pol_number;
+      pol_number = body?.SpecificContent?.pol_number || body?.InputArguments?.pol_number;
     }
 
     if (!pol_number) {
-      console.warn("⚠️ pol_number not found in webhook payload:", body);
+      console.warn("⚠️ pol_number not found in payload:", body);
       return res.status(400).json({ error: "Missing pol_number" });
     }
 
-    // 🔄 Forward to Maestro BPMN API
+    // 🔄 Forward to Maestro
     const forwardRes = await fetch(MAESTRO_URL, {
       method: "POST",
-      headers: {
-        Authorization: UIPATH_BEARER ? `Bearer ${UIPATH_BEARER}` : undefined,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pol_number }),
     });
 
@@ -85,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       maestroResponse = await forwardRes.text();
     }
 
-    console.log("✅ Forwarded to Maestro with pol_number:", pol_number);
+    console.log("✅ Forwarded to Maestro:", pol_number);
 
     return res.status(200).json({
       message: "Webhook processed",
