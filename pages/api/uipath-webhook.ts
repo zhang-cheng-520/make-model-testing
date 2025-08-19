@@ -20,41 +20,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log("📩 Webhook payload received:", body);
     console.log("DEBUG full payload:", JSON.stringify(body, null, 2));
 
-
     // Extract pol_number
-    const pol_number = body?.QueueItems[0]?.SpecificContent?.pol_number;
-    console.log(pol_number)
+    const pol_number = body?.QueueItems?.[0]?.SpecificContent?.pol_number;
+    console.log("Extracted pol_number:", pol_number);
+
     if (!pol_number) {
       console.warn("⚠️ pol_number not found in payload:", body);
-      return res.status(400).json({ error: "Missing pol_number" });
+      // ✅ Still return 200 so UiPath doesn't retry
+      return res.status(200).json({ warning: "Missing pol_number" });
     }
 
     // 🔄 Forward to Maestro
+    const forwardPayload = { pol_number, ...body.QueueItems?.[0]?.SpecificContent };
+
     const forwardRes = await fetch(MAESTRO_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(UIPATH_BEARER ? { Authorization: `Bearer ${UIPATH_BEARER}` } : {}),
       },
-      body: JSON.stringify({ pol_number}),
+      body: JSON.stringify(forwardPayload),
     });
 
-    let maestroResponse: any;
+    console.log("✅ Forwarded to Maestro, status:", forwardRes.status);
+
+    // Don’t force-read body; just log if available
+    let maestroResponse: any = null;
     try {
-      maestroResponse = await forwardRes.json();
-    } catch {
-      maestroResponse = await forwardRes.text();
+      if (forwardRes.headers.get("content-type")?.includes("application/json")) {
+        maestroResponse = await forwardRes.json();
+      } else {
+        maestroResponse = await forwardRes.text();
+      }
+    } catch (err) {
+      console.warn("⚠️ Could not read Maestro response:", err);
     }
 
-    console.log("✅ Forwarded to Maestro with pol_number:", pol_number);
-
+    // ✅ Always return 200 OK to UiPath
     return res.status(200).json({
       message: "Webhook processed",
       pol_number,
+      maestroStatus: forwardRes.status,
       maestroResponse,
     });
   } catch (err: any) {
     console.error("❌ Webhook error:", err);
-    return res.status(500).json({ error: "Internal server error" });
+    // Still respond 200 to avoid UiPath retry loops
+    return res.status(200).json({ error: String(err) });
   }
 }
