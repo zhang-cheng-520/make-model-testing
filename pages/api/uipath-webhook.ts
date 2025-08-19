@@ -18,6 +18,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const body = req.body;
     console.log("📩 Webhook payload received:", body);
+    console.log("DEBUG full payload:", JSON.stringify(body, null, 2));
+
 
     // Extract pol_number
     const pol_number = body?.QueueItem?.SpecificContent?.pol_number;
