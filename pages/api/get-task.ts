@@ -1,38 +1,111 @@
-// import type { NextApiRequest, NextApiResponse } from "next";
-
-// function sleep(ms: number) {
-//   return new Promise((resolve) => setTimeout(resolve, ms));
-// }
-
-// export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-//   // wait for 15 seconds
-//   await sleep(15000);
-
-//   res.status(200).json({ value: "test" });
-// }
-/**
- */
-// pages/api/least-loaded.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import OpenAI from "openai";
+import { z } from "zod";
+
 
 /**
  * ENV REQUIRED:
- *  UIPATH_TOKEN=<your bearer token>
+ *  OPENAI_API_KEY=<openai project key>
+ *  UIPATH_TOKEN=<uipath bearer token>
+ *  GROUP_ID_CLAIMS=<guid>
+ *  GROUP_ID_MARKETING=<guid>
+ *  GROUP_ID_TECH=<guid>
+ *  GROUP_ID_CS=<guid>           # Customer Support
+ *  GROUP_ID_BIZSUPPORT=<guid>   # Business Support
  */
-const TOKEN = process.env.UIPATH_TOKEN || "rt_85511362FCFE6AA8BC50B50FA3F36D9B051EA844239102C1DD05764C7F94BB71-1";
 
-// Tenant/account constants
+const TOKEN = process.env.UIPATH_TOKEN || "";
+
+// Tenant/account constants (yours)
 const ACCOUNT = "ecicsxdqonrj";
 const TENANT = "DefaultTenant";
 
-// Identity (group)
+// Identity (org)
 const ORG_ID = "1efb5f86-17ed-44d3-b3f5-b29b68502dea";
-const GROUP_ID = "4225e926-5732-44b0-9021-055cc3452241";
 
 // Orchestrator folder (Ecics)
 const FOLDER_ID = 847179;
 
-// ------------------------ helpers ------------------------
+// ------------ OpenAI classifier (few-shot + structured outputs via Zod) ------------
+const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
+const PROMPT_ID = process.env.EMAIL_CLASSIFIER_PROMPT_ID;
+// const PROMPT_VERSION = process.env.EMAIL_CLASSIFIER_PROMPT_VERSION || "1";
+
+if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing");
+if (!PROMPT_ID) throw new Error("EMAIL_CLASSIFIER_PROMPT_ID missing");
+
+const client = new OpenAI({ apiKey: OPENAI_KEY });
+
+type Label =
+  | "Claims"
+  | "Marketing"
+  | "Tech"
+  | "CustomerSupport"
+  | "BusinessSupport"
+  | "Other";
+
+// Zod schema to validate the model output
+const EmailRoute = z.object({
+  label: z.enum([
+    "Claims",
+    "Marketing",
+    "Tech",
+    "CustomerSupport",
+    "BusinessSupport",
+    "Other",
+  ]),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().max(220),
+});
+type EmailRouteT = z.infer<typeof EmailRoute>;
+
+function quickRedact(s: string) {
+  return String(s)
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "<PII:EMAIL>")
+    .replace(/(\+?\d[\d\s\-().]{7,}\d)/g, "<PII:PHONE>")
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "<PII:CARD>");
+}
+
+export async function classifyLabel(raw: string): Promise<EmailRouteT> {
+  const masked = quickRedact((raw ?? "").trim());
+  if (!masked) return { label: "Other", confidence: 0, rationale: "Empty input." };
+
+  const resp = await client.responses.create({
+    model: "gpt-5-mini",  // do NOT send temperature/top_p
+    prompt: {
+      id: PROMPT_ID,
+    //   version: PROMPT_VERSION,
+      variables: { email_text: masked }, // must match a declared variable in the prompt
+    },
+    text: {
+      format: {
+        type: "json_schema",
+        name: "EmailRoute",
+        strict: true,
+        schema: {
+          type: "object",
+          required: ["label", "confidence", "rationale"],
+          properties: {
+            label: { type: "string", enum: ["Claims","Marketing","Tech","CustomerSupport","BusinessSupport","Other"] },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            rationale: { type: "string", maxLength: 220 },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  });
+
+  const rawJson = resp.output_text ?? "{}";
+  try {
+    return EmailRoute.parse(JSON.parse(rawJson));
+  } catch {
+    throw new Error(`Structured output invalid: ${rawJson}`);
+  }
+}
+
+
+// ------------ UiPath helpers (your original logic, generalized) ------------
 
 async function uiGet<T>(url: string): Promise<T> {
   if (!TOKEN) throw new Error("UIPATH_TOKEN is missing");
@@ -50,9 +123,8 @@ async function uiGet<T>(url: string): Promise<T> {
   return res.json();
 }
 
-// Compute today's start/end **UTC** boundaries for the Singapore (UTC+08:00) day
+// Compute today's start/end UTC boundaries for the Singapore (UTC+08:00) day
 function getTodaySgtUtcWindow() {
-  // Get SGT's current date parts
   const now = new Date();
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Singapore",
@@ -61,23 +133,16 @@ function getTodaySgtUtcWindow() {
     day: "2-digit",
   });
   const [{ value: y }, , { value: m }, , { value: d }] = fmt.formatToParts(now);
-
-  // Build SGT midnight (YYYY-MM-DDT00:00:00+08:00)
   const sgtMidnight = new Date(`${y}-${m}-${d}T00:00:00+08:00`);
-  const startUtcIso = sgtMidnight.toISOString(); // start inclusive
-  const endUtcIso = new Date(sgtMidnight.getTime() + 24 * 60 * 60 * 1000).toISOString(); // end exclusive
-  // OData works with bare ISO (no quotes) for datetimeoffsets in filters in your tenant
+  const startUtcIso = sgtMidnight.toISOString();
+  const endUtcIso = new Date(sgtMidnight.getTime() + 24 * 60 * 60 * 1000).toISOString();
   return { startUtc: startUtcIso, endUtc: endUtcIso };
 }
 
-type IdentityMember = {
-  identifier: string; // GUID (maps to Users.Key)
-  email?: string;
-  displayName?: string;
-};
+type IdentityMember = { identifier: string; email?: string; displayName?: string; };
 
-async function getGroupMembers(): Promise<IdentityMember[]> {
-  const url = `https://cloud.uipath.com/${ACCOUNT}/identity_/api/Group/${ORG_ID}/${GROUP_ID}`;
+async function getGroupMembers(groupId: string): Promise<IdentityMember[]> {
+  const url = `https://cloud.uipath.com/${ACCOUNT}/identity_/api/Group/${ORG_ID}/${groupId}`;
   const data = await uiGet<{ members?: any[] }>(url);
   const raw = data.members || [];
   return raw
@@ -89,13 +154,7 @@ async function getGroupMembers(): Promise<IdentityMember[]> {
     }));
 }
 
-type OrchestratorUser = {
-  Id: number;
-  EmailAddress?: string;
-  UserName?: string;
-  Key: string; // GUID (matches Identity.identifier)
-  Type?: string; // "DirectoryUser", "DirectoryGroup", etc.
-};
+type OrchestratorUser = { Id: number; EmailAddress?: string; UserName?: string; Key: string; Type?: string; };
 
 async function getAllUsers(): Promise<OrchestratorUser[]> {
   const url = `https://cloud.uipath.com/${ACCOUNT}/${TENANT}/orchestrator_/odata/Users?$top=100&$select=Id,EmailAddress,UserName,Key,Type`;
@@ -114,20 +173,12 @@ type TaskItem = {
 
 async function getOpenTasksInEcicsToday(): Promise<TaskItem[]> {
   const base = `https://cloud.uipath.com/${ACCOUNT}/${TENANT}/orchestrator_/odata/Tasks/UiPath.Server.Configuration.OData.GetTasksAcrossFoldersForAdmin`;
-  const select =
-    "Id,Status,IsCompleted,CreationTime,AssignedToUserId,OrganizationUnitId";
-
+  const select = "Id,Status,IsCompleted,CreationTime,AssignedToUserId,OrganizationUnitId";
   const { startUtc, endUtc } = getTodaySgtUtcWindow();
-  // Example filter produced:
-  // OrganizationUnitId eq 847179 and IsCompleted eq false and CreationTime ge 2025-08-27T16:00:00.000Z and CreationTime lt 2025-08-28T16:00:00.000Z
   const filter =
     `OrganizationUnitId eq ${FOLDER_ID} and IsCompleted eq false` +
     ` and CreationTime ge ${startUtc} and CreationTime lt ${endUtc}`;
-
-  const url = `${base}?$top=1000&$count=true&$select=${encodeURIComponent(
-    select
-  )}&$filter=${encodeURIComponent(filter)}`;
-
+  const url = `${base}?$top=1000&$count=true&$select=${encodeURIComponent(select)}&$filter=${encodeURIComponent(filter)}`;
   const data = await uiGet<{ value: TaskItem[] }>(url);
   return data.value || [];
 }
@@ -136,48 +187,28 @@ function alphaName(a: string, b: string) {
   return a.localeCompare(b, "en", { sensitivity: "base" });
 }
 
-// ------------------------ policy logic ------------------------
-
-/**
- * Policy 1 (default):
- *   1) Fewest InProgress
- *   2) Then fewest total open assigned
- *   3) Then alphabetical by display name
- *
- * Policy 2 (strict-wip):
- *   1) Fewest InProgress
- *   2) Then alphabetical
- */
 function pickLeastLoaded(
   candidates: { email: string; userId: number; name: string }[],
   tasks: TaskItem[],
   mode: "strict-wip" | "balanced" = "balanced"
 ) {
-  // Build quick index of tasks by user
   const byUser: Record<number, TaskItem[]> = {};
   for (const t of tasks) {
-    if (t.AssignedToUserId == null) continue; // ignore unassigned
-    const uid = t.AssignedToUserId;
-    (byUser[uid] ||= []).push(t);
+    if (t.AssignedToUserId == null) continue;
+    (byUser[t.AssignedToUserId] ||= []).push(t);
   }
-
-  // Calculate metrics for each candidate
   const scored = candidates.map((c) => {
     const mine = byUser[c.userId] || [];
-    const inProgress = mine.filter((t) => t.Status === "InProgress").length;
-    const totalAssignedOpen = mine.length; // all open assigned, since IsCompleted=false in the fetch
+       const inProgress = mine.filter((t) => t.Status === "InProgress").length;
+    const totalAssignedOpen = mine.length;
     return { ...c, inProgress, totalAssignedOpen };
   });
 
-  // Sort by policy
   if (mode === "strict-wip") {
     scored.sort(
-      (a, b) =>
-        a.inProgress - b.inProgress ||
-        alphaName(a.name || a.email, b.name || b.email)
+      (a, b) => a.inProgress - b.inProgress || alphaName(a.name || a.email, b.name || b.email)
     );
   } else {
-    // balanced (Policy 1)
     scored.sort(
       (a, b) =>
         a.inProgress - b.inProgress ||
@@ -190,82 +221,103 @@ function pickLeastLoaded(
   return { selected, tallies: scored };
 }
 
-// ------------------------ API handler ------------------------
+// ------------ Label → Group mapping ------------
+
+const GROUPS: Record<Exclude<Label, "Other">, string> = {
+  Claims: process.env.GROUP_ID_CLAIMS || "",
+  Marketing: process.env.GROUP_ID_MARKETING || "",
+  Tech: process.env.GROUP_ID_TECH || "809f993a-8a1b-4805-ba8f-8a013720dd7e",
+  CustomerSupport: process.env.GROUP_ID_CS || "",
+  BusinessSupport: process.env.GROUP_ID_BIZSUPPORT || "4225e926-5732-44b0-9021-055cc3452241"
+};
+
+// ------------ API handler ------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Optional ?mode=strict-wip ; default is "balanced" (Policy 1)
-    const modeParam = (req.query.mode as string | undefined)?.toLowerCase();
-    const mode: "strict-wip" | "balanced" =
-      modeParam === "strict-wip" ? "strict-wip" : "balanced";
+    if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
+    if (!OPENAI_KEY) return res.status(400).json({ error: "OPENAI_API_KEY missing" });
+    if (!TOKEN) return res.status(400).json({ error: "UIPATH_TOKEN missing" });
 
-    // 1) Eligible users (Identity group)
-    const members = await getGroupMembers();
+    const { emailText, mode: modeParam, overrideLabel } = (req.body || {}) as {
+      emailText?: string;
+      mode?: "strict-wip" | "balanced";
+      overrideLabel?: Label; // allow manual override for testing
+    };
 
-    // 2) Map to Orchestrator users (GUID join)
+    if (!emailText && !overrideLabel) {
+      return res.status(400).json({ error: "Provide emailText or overrideLabel" });
+    }
+
+    const mode: "strict-wip" | "balanced" = modeParam === "strict-wip" ? "strict-wip" : "balanced";
+
+    // 0) classify (or honor explicit override)
+    let label: Label = overrideLabel || "Other";
+    let confidence = 0;
+    let rationale = "";
+
+    if (!overrideLabel && emailText) {
+      const out = await classifyLabel(emailText);
+      label = out.label;
+      confidence = out.confidence;
+      rationale = out.rationale;
+    }
+
+    // 1) find target group
+    const targetGroupId =
+      label !== "Other" ? GROUPS[label] : (process.env.GROUP_ID_BIZSUPPORT || ""); // fallback
+
+    if (!targetGroupId) {
+      return res.status(500).json({ error: `No GROUP_ID configured for label ${label}` });
+    }
+
+    // 2) eligible users in that group
+    const members = await getGroupMembers(targetGroupId);
+
+    // 3) map to Orchestrator users
     const allUsers = await getAllUsers();
     const userByKey = new Map(
-      allUsers
-        .filter((u) => u.Type === "DirectoryUser")
-        .map((u) => [u.Key.toLowerCase(), u])
+      allUsers.filter((u) => u.Type === "DirectoryUser").map((u) => [u.Key.toLowerCase(), u])
     );
-
     const candidates = members
       .map((m) => {
         const u = userByKey.get(m.identifier.toLowerCase());
         return {
           email: (m.email || u?.EmailAddress || u?.UserName || "").toLowerCase(),
           name: m.displayName || u?.UserName || u?.EmailAddress || "",
-          userId: u?.Id as number | undefined,
+          userId: u?.Id as number | undefined
         };
       })
       .filter((c) => typeof c.userId === "number" && c.email) as {
-      email: string;
-      name: string;
-      userId: number;
-    }[];
+        email: string; name: string; userId: number;
+      }[];
 
-    // 3) Today’s open tasks in Ecics (SGT day)
+    // 4) today’s open tasks in Ecics (SGT day)
     const tasks = await getOpenTasksInEcicsToday();
 
-    // 4) Pick least-loaded per policy
+    // 5) pick least-loaded and return
     const { selected, tallies } = pickLeastLoaded(candidates, tasks, mode);
 
     return res.status(200).json({
-    //   assigneeEmail: selected?.email || null, // flat field for Maestro
-    //   selected: selected
-    //     ? {
-    //         email: selected.email,
-    //         userId: selected.userId,
-    //         name: selected.name,
-    //         workload: {
-    //           inProgress: selected.inProgress,
-    //           openAssigned: selected.totalAssignedOpen,
-    //         },
-    //       }
-    //     : null,
-    //   tallies: tallies.map((t) => ({
-    //     email: t.email,
-    //     userId: t.userId,
-    //     name: t.name,
-    //     workload: {
-    //       inProgress: t.inProgress,
-    //       openAssigned: t.totalAssignedOpen,
-    //     },
-    //   })),
-    //   basis: {
-    //     folderId: FOLDER_ID,
-    //     day: "today (SGT)",
-    //     policy: mode === "strict-wip" ? "Policy 2: strict-wip" : "Policy 1: balanced",
-    //     filter:
-    //       "IsCompleted eq false AND CreationTime within today's SGT window",
-    //     totals: { openTasksToday: tasks.length, groupSize: candidates.length },
-    //   },
-        assigneeEmail: selected?.email || null, // flat field for Maestro
-
+      assigneeEmail: selected?.email || null,
+      label,
+      confidence,
+      rationale,
+      // --- uncomment to debug
+      // selected: selected ? {
+      //   email: selected.email,
+      //   userId: selected.userId,
+      //   name: selected.name,
+      //   workload: { inProgress: selected.inProgress, openAssigned: selected.totalAssignedOpen }
+      // } : null,
+      // tallies: tallies.map(t => ({
+      //   email: t.email, userId: t.userId, name: t.name,
+      //   workload: { inProgress: t.inProgress, openAssigned: t.totalAssignedOpen }
+      // })),
+      // basis: { folderId: FOLDER_ID, policy: mode, totals: { openTasksToday: tasks.length, groupSize: candidates.length } }
     });
   } catch (err: any) {
-    console.error("least-loaded error:", err?.message || err);
+    console.error("assign error:", err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 }
