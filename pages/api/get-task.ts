@@ -5,7 +5,7 @@ import { z } from "zod";
 
 /**
  * ENV REQUIRED:
- *  OPENAI_API_KEY=<openai project key>
+ *  task_OPENAI_API_KEY=<openai project key>
  *  UIPATH_TOKEN=<uipath bearer token>
  *  GROUP_ID_CLAIMS=<guid>
  *  GROUP_ID_MARKETING=<guid>
@@ -27,11 +27,12 @@ const ORG_ID = "1efb5f86-17ed-44d3-b3f5-b29b68502dea";
 const FOLDER_ID = 847179;
 
 // ------------ OpenAI classifier (few-shot + structured outputs via Zod) ------------
-const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
-const PROMPT_ID = process.env.EMAIL_CLASSIFIER_PROMPT_ID;
+const OPENAI_KEY = process.env.task_OPENAI_API_KEY || "";
+// const PROMPT_ID = process.env.EMAIL_CLASSIFIER_PROMPT_ID;
+const PROMPT_ID = "pmpt_68b6526aa1908195b1e14f1155983c190a1b4bfce26875ef";
 // const PROMPT_VERSION = process.env.EMAIL_CLASSIFIER_PROMPT_VERSION || "1";
 
-if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing");
+if (!OPENAI_KEY) throw new Error("task_OPENAI_API_KEY missing");
 if (!PROMPT_ID) throw new Error("EMAIL_CLASSIFIER_PROMPT_ID missing");
 
 const client = new OpenAI({ apiKey: OPENAI_KEY });
@@ -236,7 +237,7 @@ const GROUPS: Record<Exclude<Label, "Other">, string> = {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
-    if (!OPENAI_KEY) return res.status(400).json({ error: "OPENAI_API_KEY missing" });
+    if (!OPENAI_KEY) return res.status(400).json({ error: "task_OPENAI_API_KEY missing" });
     if (!TOKEN) return res.status(400).json({ error: "UIPATH_TOKEN missing" });
 
     const { emailText, mode: modeParam, overrideLabel } = (req.body || {}) as {
