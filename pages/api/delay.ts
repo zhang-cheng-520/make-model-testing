@@ -1,5 +1,9 @@
 // pages/api/delay-test.js
 export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method Not Allowed" });
+  }
+
   // Random delay between 5–10 seconds
   const delay = Math.floor(Math.random() * 5000) + 5000;
 
