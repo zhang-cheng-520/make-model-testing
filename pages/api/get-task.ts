@@ -172,17 +172,36 @@ type TaskItem = {
   OrganizationUnitId: number;
 };
 
+// async function getOpenTasksInEcicsToday(): Promise<TaskItem[]> {
+//   const base = `https://cloud.uipath.com/${ACCOUNT}/${TENANT}/orchestrator_/odata/Tasks/UiPath.Server.Configuration.OData.GetTasksAcrossFoldersForAdmin`;
+//   const select = "Id,Status,IsCompleted,CreationTime,AssignedToUserId,OrganizationUnitId";
+//   const { startUtc, endUtc } = getTodaySgtUtcWindow();
+//   const filter =
+//     `OrganizationUnitId eq ${FOLDER_ID} and IsCompleted eq false` +
+//     ` and CreationTime ge ${startUtc} and CreationTime lt ${endUtc}`;
+//   const url = `${base}?$top=1000&$count=true&$select=${encodeURIComponent(select)}&$filter=${encodeURIComponent(filter)}`;
+//   const data = await uiGet<{ value: TaskItem[] }>(url);
+//   return data.value || [];
+// }
 async function getOpenTasksInEcicsToday(): Promise<TaskItem[]> {
   const base = `https://cloud.uipath.com/${ACCOUNT}/${TENANT}/orchestrator_/odata/Tasks/UiPath.Server.Configuration.OData.GetTasksAcrossFoldersForAdmin`;
-  const select = "Id,Status,IsCompleted,CreationTime,AssignedToUserId,OrganizationUnitId";
+  const select = "Id,Status,IsCompleted,CreationTime,AssignedToUserId,OrganizationUnitId,IsDeleted";
   const { startUtc, endUtc } = getTodaySgtUtcWindow();
-  const filter =
-    `OrganizationUnitId eq ${FOLDER_ID} and IsCompleted eq false` +
-    ` and CreationTime ge ${startUtc} and CreationTime lt ${endUtc}`;
+  
+  // ✅ Filter for active (not deleted) + not completed tasks within today's window
+  const filter = [
+    `OrganizationUnitId eq ${FOLDER_ID}`,
+    `IsCompleted eq false`,
+    `IsDeleted eq false`,
+    `CreationTime ge ${startUtc}`,
+    `CreationTime lt ${endUtc}`
+  ].join(" and ");
+
   const url = `${base}?$top=1000&$count=true&$select=${encodeURIComponent(select)}&$filter=${encodeURIComponent(filter)}`;
   const data = await uiGet<{ value: TaskItem[] }>(url);
   return data.value || [];
 }
+
 
 function alphaName(a: string, b: string) {
   return a.localeCompare(b, "en", { sensitivity: "base" });
