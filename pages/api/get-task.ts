@@ -173,7 +173,9 @@ function getTodaySgtUtcWindow() {
 type IdentityMember = { identifier: string; email?: string; displayName?: string; };
 
 async function getGroupMembers(groupId: string): Promise<IdentityMember[]> {
+  // const url = `https://cloud.uipath.com/ecicsnzpxpmp/identity_/api/Group/ff26bb5a-ad58-4f52-b61c-b65a295b82e7/${groupId}`;
   const url = `https://cloud.uipath.com/${ACCOUNT}/identity_/api/Group/${ORG_ID}/${groupId}`;
+
   const data = await uiGet<{ members?: any[] }>(url);
   const raw = data.members || [];
   return raw
@@ -272,13 +274,13 @@ function pickLeastLoaded(
 }
 
 // ------------ Label → Group mapping ------------
-
+// Run the API Get Group List in postman to get all the IDs
 const GROUPS: Record<Exclude<Label, "Other">, string> = {
   Claims: process.env.GROUP_ID_CLAIMS || "",
   Marketing: process.env.GROUP_ID_MARKETING || "",
-  Tech: process.env.GROUP_ID_TECH || "809f993a-8a1b-4805-ba8f-8a013720dd7e",
+  Tech: process.env.GROUP_ID_TECH || "fae20958-d0af-4782-bfbd-3ef2f5684c89",
   CustomerSupport: process.env.GROUP_ID_CS || "",
-  BusinessSupport: process.env.GROUP_ID_BIZSUPPORT || "4225e926-5732-44b0-9021-055cc3452241"
+  BusinessSupport: process.env.GROUP_ID_BIZSUPPORT || ""
 };
 
 // ------------ API handler ------------
@@ -316,14 +318,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1) find target group
     const targetGroupId =
       label !== "Other" ? GROUPS[label] : (process.env.GROUP_ID_BIZSUPPORT || ""); // fallback
-
+    // console.log("label ",label)
     if (!targetGroupId) {
       return res.status(500).json({ error: `No GROUP_ID configured for label ${label}` });
     }
 
     // 2) eligible users in that group
     const members = await getGroupMembers(targetGroupId);
-
+    console.log(members)
     // 3) map to Orchestrator users
     const allUsers = await getAllUsers();
     const userByKey = new Map(
