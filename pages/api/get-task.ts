@@ -4,6 +4,36 @@ import { z } from "zod";
 
 
 /**
+ * ---------------------------------------------------------------------------
+ * Task Auto-Assignment Logic (Summary)
+ * ---------------------------------------------------------------------------
+ *
+ * This API endpoint classifies an incoming email, determines which UiPath
+ * group should handle it, and automatically assigns the task to the least
+ * loaded user in that group.
+ *
+ * Workflow overview:
+ *  1. Classify the email text using OpenAI → returns a label (e.g. "Tech", "BusinessSupport").
+ *  2. Map the label to a UiPath Identity Group (via GROUP_ID_xxx env variables).
+ *  3. Retrieve all users from that group (Identity API).
+ *  4. Map group members to Orchestrator users to get their numeric user IDs.
+ *  5. Query all active (IsCompleted = false, IsDeleted = false) tasks in the
+ *     Ecics folder to get each user’s current workload.
+ *  6. Count tasks per user:
+ *        - inProgress = number of tasks with Status === "InProgress"
+ *        - openAssigned = number of tasks assigned but not completed
+ *  7. Select the user with the fewest inProgress → openAssigned → alphabetical order.
+ *  8. Return the chosen assignee and full workload tallies for transparency.
+ *
+ * Notes:
+ *  - Task filtering is limited to active, not-deleted tasks in the Ecics folder.
+ *  - Future enhancement: optionally filter tasks by TaskCatalogName
+ *    (e.g., "Business Support", "Customer Experience") for finer workload balance.
+ * ---------------------------------------------------------------------------
+ */
+
+
+/**
  * ENV REQUIRED:
  *  task_OPENAI_API_KEY=<openai project key>
  *  UIPATH_TOKEN=<uipath bearer token>
@@ -17,14 +47,14 @@ import { z } from "zod";
 const TOKEN = process.env.UIPATH_TOKEN || "";
 
 // Tenant/account constants (yours)
-const ACCOUNT = "ecicsxdqonrj";
+const ACCOUNT = "ecicsnzpxpmp";
 const TENANT = "DefaultTenant";
 
 // Identity (org)
-const ORG_ID = "1efb5f86-17ed-44d3-b3f5-b29b68502dea";
+const ORG_ID = "ff26bb5a-ad58-4f52-b61c-b65a295b82e7";
 
 // Orchestrator folder (Ecics)
-const FOLDER_ID = 847179;
+const FOLDER_ID = 871299;
 
 // ------------ OpenAI classifier (few-shot + structured outputs via Zod) ------------
 const OPENAI_KEY = process.env.task_OPENAI_API_KEY || "";
