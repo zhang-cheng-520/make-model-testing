@@ -15,7 +15,8 @@ function parseMachines(env?: string) {
 // 🔒 Per-client route permissions
 const CLIENT_ROUTE_ALLOWLIST: Record<string, string[]> = {
   "38lptb6vmt1m0jdljnfuhfdh6v": [
-    "/api/v1/o3/policyholder-icno/by-icno"
+    "/api/v1/o3/policyholder-icno/by-icno",
+     "/api/renewal/excel"
   ]
 }
 
