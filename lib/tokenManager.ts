@@ -1,93 +1,106 @@
 // lib/tokenManager.ts
-import axios from 'axios';
-import { getEdgeValue } from './services/edgeConfigClient';
-import { updateEdgeConfig } from './services/edgeConfigWriter';
+import fs from "fs";
+import path from "path";
 
-export interface TokenData {
+interface TokenData {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
 }
 
-let cachedTokenData: TokenData | null = null;
+const TOKEN_FILE = path.join(process.cwd(), ".token-cache.json");
+
+// In-memory cache (resets on server restart)
+let memoryCache: TokenData | null = null;
 
 export async function getTokenData(): Promise<TokenData | null> {
-  const now = Math.floor(Date.now() / 1000);
+  // 1. Check in-memory first
+  if (memoryCache) {
+    console.log("📦 Using in-memory token cache");
+    return memoryCache;
+  }
 
-  if (!cachedTokenData) {
-    try {
-      const edgeData = await getEdgeValue<TokenData>('teamsToken');
-      if (edgeData) cachedTokenData = edgeData;
-    } catch (error) {
-      console.error('Token retrieval from Edge Config failed:', error);
+  // 2. Fallback to file-based cache (survives hot reloads in dev)
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      const raw = fs.readFileSync(TOKEN_FILE, "utf-8");
+      const data: TokenData = JSON.parse(raw);
+      memoryCache = data; // hydrate memory
+      console.log("📁 Loaded token from file cache");
+      return data;
     }
+  } catch (err) {
+    console.warn("⚠️ Failed to read token file:", err);
   }
 
-  return cachedTokenData;
-}
-
-export async function refreshAccessToken(oldRefreshToken: string): Promise<TokenData> {
-  if (!oldRefreshToken) {
-    throw new Error('No refresh token available');
-  }
-
-  const response = await axios.post(
-    `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/token`,
-    new URLSearchParams({
-      client_id: process.env.CLIENT_ID!,
-      client_secret: process.env.CLIENT_SECRET!,
-      grant_type: 'refresh_token',
-      refresh_token: oldRefreshToken,
-      redirect_uri: process.env.REDIRECT_URI!,
-      scope: 'ChannelMessage.Send Chat.ReadWrite offline_access',
-    })
-  );
-  console.log(response.data)
-
-  const newTokenData: TokenData = {
-    accessToken: response.data.access_token,
-    refreshToken: response.data.refresh_token,
-    expiresAt: Math.floor(Date.now() / 1000) + 89 * 24 * 60 * 60, // 89 days (default setting of 90 days in Azure)
-  };
-
-  await saveTokenData(newTokenData); // Updates Edge Config and cache
-  return newTokenData;
+  return null;
 }
 
 export async function saveTokenData(data: TokenData): Promise<void> {
-  if (
-    !data?.accessToken ||
-    !data?.refreshToken ||
-    !data?.expiresAt ||
-    data.expiresAt < Math.floor(Date.now() / 1000)
-  ) {
-    throw new Error('Invalid token data or expired token');
-  }
+  memoryCache = data; // always update memory
 
+  // Also persist to file so dev server hot reloads don't lose it
   try {
-    await updateEdgeConfig([
-      {
-        operation: 'upsert',
-        key: 'teamsToken',
-        value: {
-          ...data,
-          // expiresAt: Math.max(data.expiresAt, Math.floor(Date.now() / 1000) + 300),
-        },
-      },
-    ]);
-    cachedTokenData = data;
-  } catch (error) {
-    console.error('Primary token save failed, using fallback:', error);
-    cachedTokenData = data;
-    throw new Error('Failed to save token to Edge Config; fallback used');
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(data, null, 2), "utf-8");
+    console.log("💾 Token saved to file cache");
+  } catch (err) {
+    console.warn("⚠️ Failed to write token file:", err);
   }
 }
 
-export async function clearTokens(): Promise<void> {
+export async function clearTokenData(): Promise<void> {
+  memoryCache = null;
   try {
-    await updateEdgeConfig([{ operation: 'delete', key: 'teamsToken' }]);
-  } catch (error) {
-    console.error('Failed to clear Edge Config tokens:', error);
+    if (fs.existsSync(TOKEN_FILE)) {
+      fs.unlinkSync(TOKEN_FILE);
+      console.log("🗑️ Token cache cleared");
+    }
+  } catch (err) {
+    console.warn("⚠️ Failed to clear token file:", err);
   }
-  cachedTokenData = null;
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<TokenData> {
+  const axios = (await import("axios")).default;
+
+  console.log("Refreshing token...");
+  console.log("Tenant ID:", process.env.TENANT_ID);
+  console.log("Client ID:", process.env.CLIENT_ID);
+  console.log("Redirect URI:", process.env.REDIRECT_URI);
+
+  try {
+    const response = await axios.post(
+      `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/token`,
+      new URLSearchParams({
+        client_id: process.env.CLIENT_ID!,
+        client_secret: process.env.CLIENT_SECRET!,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+        scope: "https://graph.microsoft.com/ChannelMessage.Send https://graph.microsoft.com/Chat.ReadWrite https://graph.microsoft.com/Team.ReadBasic.All openid profile offline_access",
+      }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const { access_token, refresh_token, expires_in } = response.data;
+    const expiresAt = Math.floor(Date.now() / 1000) + expires_in;
+
+    const tokenData: TokenData = {
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      expiresAt,
+    };
+
+    await saveTokenData(tokenData);
+    return tokenData;
+  } catch (error: any) {
+    console.error("========== MICROSOFT OAUTH ERROR ==========");
+    console.error("Status:", error.response?.status);
+    console.error(error.response?.data);
+    console.error("===========================================");
+    throw error;
+  }
 }
