@@ -6,3 +6,6 @@
 /.idea
 /.DS_Store
 pages/api/test-*.ts
+dev-out.log
+dev-err.log
+tsconfig.tsbuildinfo

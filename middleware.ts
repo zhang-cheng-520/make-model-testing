@@ -1,56 +1,41 @@
-// // middleware.ts
-// import { NextResponse } from 'next/server';
-// import type { NextRequest } from 'next/server';
-// import { jwtVerify } from 'jose'
-
-// export async function middleware(request: NextRequest, response: NextResponse) {
-
-//     // Public routes
-//     const publicRoutes = [];
-
-//     if (publicRoutes.includes(request.nextUrl.pathname)) {
-//         return NextResponse.next();
-//     }
-
-//     // Private routes
-//     let token = null;
-//     const authHeader = request.headers.get('authorization');
-//     if (authHeader && authHeader.startsWith('Bearer ')) {
-//         token = authHeader.substring(7); // Remove 'Bearer ' prefix
-//     }
-
-//     if (!token) {
-//         // Redirect to login if not authenticated
-//         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-//     }
-
-//     try {
-//         let { payload } = await jwtVerify(token, new TextEncoder().encode(process.env.JWT_PARTNER_SECRET));
-
-//         // hard check for TDT for now. 
-//         // TODO: in future have a database of partner access or AWS Cognito or similar
-//         if (payload.userId !== process.env.TDT_API_ID) {
-//             return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
-//         }
-
-//         return NextResponse.next();
-//     } catch (err) {
-//         // Invalid or expired token
-//         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-//     }
-// }
-
-// export const config = {
-//     matcher: ['/', '/dashboard', '/api/:path*'], // Protect these routes
-// };
 // middleware.ts
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { jwtVerify } from "jose";
 
-export function middleware(request: NextRequest) {
+const SESSION_COOKIE_NAME = "dashboard_session";
+
+async function hasValidSession(request: NextRequest): Promise<boolean> {
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return false;
+  const secret = process.env.DASHBOARD_SESSION_SECRET || "";
+  if (!secret) return false;
+  try {
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+    return payload.authenticated === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const authed = await hasValidSession(request);
+
+  if (pathname.startsWith("/api/dashboard/")) {
+    if (!authed) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.next();
+  }
+
+  // /dashboard/* pages
+  if (!authed) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/api/:path*'], // runs only on API routes
+  matcher: ["/dashboard/:path*", "/api/dashboard/:path*"],
 };
