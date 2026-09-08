@@ -375,7 +375,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await recordPendingAssignment(sourceGroupId, selected.userId, selected.email);
       }
 
-      return res.status(200).json({
+      const responseBody = {
         groupName,
         groupId: group.id,
         sourceGroup: sourceGroupName,
@@ -391,7 +391,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           inProgress: t.inProgress,
           totalAssignedOpen: t.totalAssignedOpen,
         })),
-      });
+      };
+
+      // Logged in full so a specific Maestro run's response (who got picked,
+      // and every candidate's task count at that moment) can be inspected
+      // after the fact from the Vercel log stream, not just replayed live.
+      console.log("ca-assign-task response:", JSON.stringify(responseBody));
+
+      return res.status(200).json(responseBody);
     } finally {
       await releaseGroupLock(sourceGroupId);
     }
