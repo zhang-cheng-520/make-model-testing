@@ -145,7 +145,7 @@ async function getInOfficeMap(identifiers: string[]): Promise<Map<string, boolea
 //      assignment to actually show up in Orchestrator's own task list.
 // ---------------------------------------------------------------------------
 const LOCK_TTL_SECONDS = 5;
-const LOCK_MAX_WAIT_MS = 8000;
+const LOCK_MAX_WAIT_MS = 15000;
 const LOCK_RETRY_DELAY_MS = 150;
 const PENDING_RESERVATION_TTL_SECONDS = 120;
 
@@ -343,8 +343,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 3) serialize concurrent requests for the same source group so two jobs
+    // 3) current open (not completed, not deleted) tasks in the target folder.
+    // Fetched *before* the lock — this is a folder-wide read that doesn't
+    // depend on other concurrent requests' picks, so it doesn't need to sit
+    // inside the serialized critical section (it's also the slowest call here).
+    const tasks = await getOpenTasksInFolder(String(folderId));
+
+    // 4) serialize concurrent requests for the same source group so two jobs
     // firing at once can't both read "everyone idle" and pick the same person.
+    // Kept as small as possible (two fast Supabase round-trips) so a burst of
+    // concurrent calls clears well within the wait budget.
     const gotLock = await acquireGroupLock(sourceGroupId);
     if (!gotLock) {
       return res.status(503).json({
@@ -355,9 +363,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      // 4) current open (not completed, not deleted) tasks in the target folder
-      const tasks = await getOpenTasksInFolder(String(folderId));
-
       // 5) recent reservations not yet reflected in Orchestrator's task list
       const pendingCounts = await getPendingCounts(sourceGroupId);
 
