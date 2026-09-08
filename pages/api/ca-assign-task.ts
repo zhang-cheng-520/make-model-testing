@@ -162,7 +162,9 @@ async function acquireGroupLock(groupId: string): Promise<boolean> {
     });
     if (error) throw new Error(`try_acquire_lock failed: ${error.message}`);
     if (data === true) return true;
-    await sleep(LOCK_RETRY_DELAY_MS);
+    // Jitter avoids a thundering-herd effect where every waiting request
+    // retries in lockstep and the same requests keep losing the race.
+    await sleep(LOCK_RETRY_DELAY_MS + Math.floor(Math.random() * LOCK_RETRY_DELAY_MS));
   }
   return false;
 }
