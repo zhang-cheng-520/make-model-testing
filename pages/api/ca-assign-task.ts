@@ -132,6 +132,72 @@ async function getInOfficeMap(identifiers: string[]): Promise<Map<string, boolea
   return map;
 }
 
+// ---------------------------------------------------------------------------
+// Concurrency safety: two BPMN jobs can call this endpoint for the same group
+// at (near) the same instant. Without coordination, both read the same
+// "everyone is idle" snapshot from Orchestrator and both pick the same person.
+// Fixed with:
+//   1. A per-group advisory lock (Postgres row, acquired via an atomic
+//      INSERT ... ON CONFLICT ... WHERE) so concurrent requests for the same
+//      group are serialized through the pick-and-reserve step.
+//   2. A short-TTL "pending reservation" ledger, added on top of the live
+//      Orchestrator counts, to cover the seconds it takes for a just-made
+//      assignment to actually show up in Orchestrator's own task list.
+// ---------------------------------------------------------------------------
+const LOCK_TTL_SECONDS = 5;
+const LOCK_MAX_WAIT_MS = 8000;
+const LOCK_RETRY_DELAY_MS = 150;
+const PENDING_RESERVATION_TTL_SECONDS = 120;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireGroupLock(groupId: string): Promise<boolean> {
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const { data, error } = await (supabaseAdmin() as any).rpc("try_acquire_lock", {
+      p_group_id: groupId,
+      p_ttl_seconds: LOCK_TTL_SECONDS,
+    });
+    if (error) throw new Error(`try_acquire_lock failed: ${error.message}`);
+    if (data === true) return true;
+    await sleep(LOCK_RETRY_DELAY_MS);
+  }
+  return false;
+}
+
+async function releaseGroupLock(groupId: string): Promise<void> {
+  const { error } = await (supabaseAdmin() as any).rpc("release_lock", { p_group_id: groupId });
+  if (error) console.error(`release_lock failed for ${groupId}:`, error.message);
+}
+
+async function getPendingCounts(groupId: string): Promise<Map<number, number>> {
+  const cutoff = new Date(Date.now() - PENDING_RESERVATION_TTL_SECONDS * 1000).toISOString();
+  // Best-effort cleanup of expired reservations so the table doesn't grow unbounded.
+  await supabaseAdmin().from("pending_assignments").delete().lt("reserved_at", cutoff);
+
+  const { data, error } = await supabaseAdmin()
+    .from("pending_assignments")
+    .select("user_id")
+    .eq("group_id", groupId)
+    .gte("reserved_at", cutoff);
+  if (error) throw new Error(`pending_assignments lookup failed: ${error.message}`);
+
+  const counts = new Map<number, number>();
+  for (const row of (data || []) as { user_id: number }[]) {
+    counts.set(row.user_id, (counts.get(row.user_id) || 0) + 1);
+  }
+  return counts;
+}
+
+async function recordPendingAssignment(groupId: string, userId: number, email: string): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from("pending_assignments")
+    .insert({ group_id: groupId, user_id: userId, email } as any);
+  if (error) console.error(`recordPendingAssignment failed for group ${groupId}, user ${userId}:`, error.message);
+}
+
 type Candidate = { identifier: string; email: string; name: string; userId: number };
 
 async function buildCandidatePool(groupId: string): Promise<{ allCandidates: Candidate[]; inOfficeCandidates: Candidate[] }> {
@@ -161,7 +227,12 @@ function alphaName(a: string, b: string) {
   return a.localeCompare(b, "en", { sensitivity: "base" });
 }
 
-function pickLeastLoaded(candidates: Candidate[], tasks: TaskItem[], mode: "strict-wip" | "balanced") {
+function pickLeastLoaded(
+  candidates: Candidate[],
+  tasks: TaskItem[],
+  pendingCounts: Map<number, number>,
+  mode: "strict-wip" | "balanced"
+) {
   const byUser: Record<number, TaskItem[]> = {};
   for (const t of tasks) {
     if (t.AssignedToUserId == null) continue;
@@ -170,7 +241,9 @@ function pickLeastLoaded(candidates: Candidate[], tasks: TaskItem[], mode: "stri
   const scored = candidates.map((c) => {
     const mine = byUser[c.userId] || [];
     const inProgress = mine.filter((t) => t.Status === "InProgress").length;
-    const totalAssignedOpen = mine.length;
+    // Pending reservations cover assignments made moments ago that haven't
+    // shown up in Orchestrator's task list yet (concurrency + propagation lag).
+    const totalAssignedOpen = mine.length + (pendingCounts.get(c.userId) || 0);
     return { ...c, inProgress, totalAssignedOpen };
   });
 
@@ -270,29 +343,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 3) current open (not completed, not deleted) tasks in the target folder
-    const tasks = await getOpenTasksInFolder(String(folderId));
+    // 3) serialize concurrent requests for the same source group so two jobs
+    // firing at once can't both read "everyone idle" and pick the same person.
+    const gotLock = await acquireGroupLock(sourceGroupId);
+    if (!gotLock) {
+      return res.status(503).json({
+        error: `Timed out waiting for the assignment lock on group "${sourceGroupName}" — another request is being processed. Retry.`,
+        groupId: group.id,
+        sourceGroupId,
+      });
+    }
 
-    // 4) pick least-loaded among the eligible (in-office) candidates
-    const { selected, tallies } = pickLeastLoaded(candidatesToUse, tasks, mode);
+    try {
+      // 4) current open (not completed, not deleted) tasks in the target folder
+      const tasks = await getOpenTasksInFolder(String(folderId));
 
-    return res.status(200).json({
-      groupName,
-      groupId: group.id,
-      sourceGroup: sourceGroupName,
-      sourceGroupId,
-      fallback,
-      folderId,
-      mode,
-      assigneeEmail: selected?.email || null,
-      tallies: tallies.map((t) => ({
-        email: t.email,
-        name: t.name,
-        userId: t.userId,
-        inProgress: t.inProgress,
-        totalAssignedOpen: t.totalAssignedOpen,
-      })),
-    });
+      // 5) recent reservations not yet reflected in Orchestrator's task list
+      const pendingCounts = await getPendingCounts(sourceGroupId);
+
+      // 6) pick least-loaded among the eligible (in-office) candidates
+      const { selected, tallies } = pickLeastLoaded(candidatesToUse, tasks, pendingCounts, mode);
+
+      if (selected) {
+        await recordPendingAssignment(sourceGroupId, selected.userId, selected.email);
+      }
+
+      return res.status(200).json({
+        groupName,
+        groupId: group.id,
+        sourceGroup: sourceGroupName,
+        sourceGroupId,
+        fallback,
+        folderId,
+        mode,
+        assigneeEmail: selected?.email || null,
+        tallies: tallies.map((t) => ({
+          email: t.email,
+          name: t.name,
+          userId: t.userId,
+          inProgress: t.inProgress,
+          totalAssignedOpen: t.totalAssignedOpen,
+        })),
+      });
+    } finally {
+      await releaseGroupLock(sourceGroupId);
+    }
   } catch (err: any) {
     console.error("ca-assign-task error:", err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });
