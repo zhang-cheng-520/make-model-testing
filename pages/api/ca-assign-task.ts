@@ -147,7 +147,7 @@ async function getInOfficeMap(identifiers: string[]): Promise<Map<string, boolea
 const LOCK_TTL_SECONDS = 5;
 const LOCK_MAX_WAIT_MS = 15000;
 const LOCK_RETRY_DELAY_MS = 150;
-const PENDING_RESERVATION_TTL_SECONDS = 120;
+const PENDING_RESERVATION_TTL_SECONDS = 40;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
