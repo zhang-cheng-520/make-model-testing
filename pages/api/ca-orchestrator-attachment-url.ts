@@ -42,21 +42,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ url: "", errorMessage: "id is required" });
   }
 
+  const label = `ca-orchestrator-attachment-url [id=${id}]`;
+
   try {
     const getRes = await fetch(`${orchestratorBase()}/odata/Attachments(${id})`, {
       headers: { Authorization: `Bearer ${CA_ORCHESTRATOR_PAT}` },
     });
     if (!getRes.ok) {
       const body = await getRes.text().catch(() => "");
+      console.error(`${label} Attachments getById failed: ${getRes.status}`, body.slice(0, 1000));
       return res.status(502).json({ url: "", errorMessage: `Attachments getById failed: ${getRes.status} ${body}`.slice(0, 1000) });
     }
     const data = (await getRes.json()) as { BlobFileAccess?: BlobFileAccess };
     const url = data.BlobFileAccess?.Uri;
     if (!url) {
+      console.error(`${label} no BlobFileAccess.Uri in response`, data);
       return res.status(502).json({ url: "", errorMessage: "Attachments getById returned no BlobFileAccess.Uri" });
     }
+    console.log(`${label} resolved ok`);
     return res.status(200).json({ url, errorMessage: "" });
   } catch (err: any) {
+    console.error(`${label} unhandled error`, err?.message || err);
     return res.status(500).json({ url: "", errorMessage: String(err?.message || err) });
   }
 }

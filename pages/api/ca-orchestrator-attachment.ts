@@ -65,6 +65,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "No folderId provided and CA_FOLDER_ID is not configured" });
   }
 
+  const label = `ca-orchestrator-attachment [fileName=${fileName} folderId=${targetFolderId}]`;
+
   try {
     // Step 1: create the attachment record, get back a short-lived write URI.
     const createRes = await fetch(`${orchestratorBase()}/odata/Attachments`, {
@@ -78,10 +80,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!createRes.ok) {
       const body = await createRes.text().catch(() => "");
+      console.error(`${label} Attachments create failed: ${createRes.status}`, body.slice(0, 1000));
       return res.status(502).json({ error: `Attachments create failed: ${createRes.status} ${body}`.slice(0, 1000) });
     }
     const created = (await createRes.json()) as { Id: string; Name: string; BlobFileAccess: BlobFileAccess };
     const blob = created.BlobFileAccess;
+    console.log(`${label} attachment record created`, created.Id);
 
     // Step 2: upload the actual bytes to the blob SAS URL.
     const bytes = Buffer.from(fileBase64, "base64");
@@ -101,11 +105,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!uploadRes.ok) {
       const body = await uploadRes.text().catch(() => "");
+      console.error(`${label} Blob upload failed: ${uploadRes.status}`, body.slice(0, 1000));
       return res.status(502).json({ error: `Blob upload failed: ${uploadRes.status} ${body}`.slice(0, 1000) });
     }
 
+    console.log(`${label} upload complete`, created.Id);
     return res.status(200).json({ id: created.Id, name: created.Name });
   } catch (err: any) {
+    console.error(`${label} unhandled error`, err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });
   }
 }

@@ -42,6 +42,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ signedUrl: "", errorMessage: "CA_FILEAI_API_KEY is not configured on the server" });
   }
 
+  const log = (msg: string, extra?: unknown) =>
+    console.log(`ca-fileai-preview [directoryId=${directoryId} fileId=${fileId}] ${msg}`, extra ?? "");
+  const logErr = (msg: string, extra?: unknown) =>
+    console.error(`ca-fileai-preview [directoryId=${directoryId} fileId=${fileId}] ${msg}`, extra ?? "");
+
   try {
     // Step 1+2: list files for this case folder, match fileId in code — never
     // call /files?fileId=, it silently ignores the filter (see markdown).
@@ -51,14 +56,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
     if (!listRes.ok) {
       const body = await listRes.text().catch(() => "");
+      logErr(`fileAI /files failed: ${listRes.status}`, body.slice(0, 500));
       return res.status(502).json({
         signedUrl: "",
         errorMessage: `fileAI /files failed: ${listRes.status} ${body}`.slice(0, 500),
       });
     }
-    const listData = (await listRes.json()) as { files?: FileAiFile[] };
+    const listData = (await listRes.json()) as { files?: FileAiFile[]; count?: number };
     const match = (listData.files || []).find((f) => f.fileId === fileId);
     if (!match) {
+      logErr(`no match — directory had ${listData.files?.length ?? 0} file(s)`, listData.files?.map((f) => f.fileId));
       return res.status(404).json({ signedUrl: "", errorMessage: `No file with id ${fileId} in directory ${directoryId}` });
     }
 
@@ -70,6 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!previewRes.ok) {
       const body = await previewRes.text().catch(() => "");
+      logErr(`fileAI /files/preview failed: ${previewRes.status}`, body.slice(0, 500));
       return res.status(502).json({
         signedUrl: "",
         errorMessage: `fileAI /files/preview failed: ${previewRes.status} ${body}`.slice(0, 500),
@@ -77,11 +85,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const previewData = (await previewRes.json()) as { signedUrl?: string };
     if (!previewData.signedUrl) {
+      logErr("fileAI /files/preview returned no signedUrl", previewData);
       return res.status(502).json({ signedUrl: "", errorMessage: "fileAI /files/preview returned no signedUrl" });
     }
 
+    log("minted signed URL ok");
     return res.status(200).json({ signedUrl: previewData.signedUrl, errorMessage: "" });
   } catch (err: any) {
+    logErr("unhandled error", err?.message || err);
     return res.status(500).json({ signedUrl: "", errorMessage: String(err?.message || err) });
   }
 }
