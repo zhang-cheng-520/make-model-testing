@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
 import { Button } from "../../components/ui/button";
+import { DashboardLayout } from "../../components/dashboard-layout";
 import { Switch } from "../../components/ui/switch";
 import {
   Select,
@@ -37,7 +37,6 @@ type Row = {
 };
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
   const [rows, setRows] = useState<Row[]>([]);
@@ -132,27 +131,17 @@ export default function DashboardPage() {
     }
   }
 
-  async function signOut() {
-    await fetch("/api/auth/dashboard-logout", { method: "POST" });
-    router.push("/login");
-  }
-
   return (
     <TooltipProvider>
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="inline-flex items-center gap-1.5 text-xl font-semibold">
-            Case Assignment Dashboard
-            <InfoTooltip text={IN_OFFICE_INFO} />
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Members mirror UiPath live. Membership itself can only be changed in UiPath.
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={signOut}>
-          Sign out
-        </Button>
+    <DashboardLayout>
+      <div className="mb-6">
+        <h1 className="inline-flex items-center gap-1.5 text-xl font-semibold">
+          Case Assignment Dashboard
+          <InfoTooltip text={IN_OFFICE_INFO} />
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Members mirror UiPath live. Membership itself can only be changed in UiPath.
+        </p>
       </div>
 
       <div className="mb-4 max-w-xs">
@@ -223,7 +212,7 @@ export default function DashboardPage() {
           </Table>
         </div>
       )}
-    </div>
+    </DashboardLayout>
     </TooltipProvider>
   );
 }
