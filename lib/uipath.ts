@@ -51,6 +51,18 @@ export async function getCustomGroups(): Promise<IdentityGroup[]> {
   return groups.filter((g) => g.type !== 0);
 }
 
+// Case-insensitive match on name or displayName — same resolution logic
+// ca-assign-task.ts uses privately, made reusable here.
+export async function findGroupIdByName(groupName: string): Promise<IdentityGroup | null> {
+  const groups = await getGroups();
+  const needle = groupName.trim().toLowerCase();
+  return (
+    groups.find(
+      (g) => g.name?.trim().toLowerCase() === needle || g.displayName?.trim().toLowerCase() === needle
+    ) || null
+  );
+}
+
 export type IdentityMember = { identifier: string; email?: string; displayName?: string };
 
 export async function getGroupMembers(groupId: string): Promise<IdentityMember[]> {

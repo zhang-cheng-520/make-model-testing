@@ -7,6 +7,7 @@ import { cn } from "../lib/utils";
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/trpa", label: "TRPA - Release+DebitNote" },
+  { href: "/dashboard/holidays", label: "Public Holidays" },
 ];
 
 export function DashboardLayout({ children }: { children: ReactNode }) {
