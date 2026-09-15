@@ -19,10 +19,14 @@
 // leaving it absent would silently fail to take them out of the pool). A
 // member who already has in_office=false (e.g. on MC) is left completely
 // untouched, so their existing updated_at/updated_by trail isn't clobbered.
+//
+// Same-day overlap guard: if SG and MY are both a public holiday on the same
+// date, neither country's In Office gets touched that day — the update is
+// skipped entirely for both, rather than flipping one or both groups.
 
 import { supabaseAdmin } from "./supabaseAdmin";
 import { assertUipathConfigured, findGroupIdByName, getResolvedGroupMembers } from "./uipath";
-import { checkPublicHoliday, todayInSingaporeMalaysia } from "./publicHolidays";
+import { checkPublicHoliday, todayInSingaporeMalaysia, type HolidayCheckResult } from "./publicHolidays";
 import type { HolidayCountryCode } from "./categories";
 
 // Real UiPath Identity group names (Admin > Identities > Groups), resolved by
@@ -39,14 +43,12 @@ export type CountryResult = {
   groupMemberCount?: number;
   updatedCount: number;
   newRowCount: number;
+  skippedReason?: string;
 };
 
 export type SweepResult = { date: string; sg: CountryResult; my: CountryResult };
 
-async function markCountryOutOfOffice(country: HolidayCountryCode, dateStr: string): Promise<CountryResult> {
-  const { isHoliday, name } = await checkPublicHoliday(country, dateStr);
-  if (!isHoliday) return { isHoliday: false, updatedCount: 0, newRowCount: 0 };
-
+async function applyCountryUpdate(country: HolidayCountryCode, holidayName: string): Promise<CountryResult> {
   const groupName = GROUP_NAME_BY_COUNTRY[country];
   const group = await findGroupIdByName(groupName);
   if (!group) throw new Error(`UiPath group "${groupName}" not found`);
@@ -54,7 +56,7 @@ async function markCountryOutOfOffice(country: HolidayCountryCode, dateStr: stri
   const members = await getResolvedGroupMembers(group.id);
   const identifiers = members.map((m) => m.identifier);
   if (identifiers.length === 0) {
-    return { isHoliday: true, holidayName: name, groupName, groupMemberCount: 0, updatedCount: 0, newRowCount: 0 };
+    return { isHoliday: true, holidayName, groupName, groupMemberCount: 0, updatedCount: 0, newRowCount: 0 };
   }
 
   const now = new Date().toISOString();
@@ -99,7 +101,7 @@ async function markCountryOutOfOffice(country: HolidayCountryCode, dateStr: stri
 
   return {
     isHoliday: true,
-    holidayName: name,
+    holidayName,
     groupName,
     groupMemberCount: identifiers.length,
     updatedCount,
@@ -107,11 +109,29 @@ async function markCountryOutOfOffice(country: HolidayCountryCode, dateStr: stri
   };
 }
 
+function skippedResult(check: HolidayCheckResult, reason: string): CountryResult {
+  return { isHoliday: check.isHoliday, holidayName: check.name, updatedCount: 0, newRowCount: 0, skippedReason: reason };
+}
+
 export async function runHolidayInOfficeSweep(dateStr: string = todayInSingaporeMalaysia()): Promise<SweepResult> {
   assertUipathConfigured();
-  const [sg, my] = await Promise.all([
-    markCountryOutOfOffice("SG", dateStr),
-    markCountryOutOfOffice("MY", dateStr),
+
+  const [sgCheck, myCheck] = await Promise.all([
+    checkPublicHoliday("SG", dateStr),
+    checkPublicHoliday("MY", dateStr),
   ]);
+
+  // Same-day overlap: both countries on holiday at once — leave In Office
+  // untouched for both rather than flipping either.
+  if (sgCheck.isHoliday && myCheck.isHoliday) {
+    const reason = "SG and MY are both a public holiday on this date — In Office left unchanged for both";
+    return { date: dateStr, sg: skippedResult(sgCheck, reason), my: skippedResult(myCheck, reason) };
+  }
+
+  const [sg, my] = await Promise.all([
+    sgCheck.isHoliday ? applyCountryUpdate("SG", sgCheck.name!) : { isHoliday: false, updatedCount: 0, newRowCount: 0 },
+    myCheck.isHoliday ? applyCountryUpdate("MY", myCheck.name!) : { isHoliday: false, updatedCount: 0, newRowCount: 0 },
+  ]);
+
   return { date: dateStr, sg, my };
 }

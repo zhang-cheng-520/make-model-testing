@@ -16,9 +16,16 @@
 // per-user identity, same limitation as user_metadata.updated_by, see
 // docs/PRD-hr-dashboard.md §5.5), so every write is stamped with the shared
 // DASHBOARD_LOGIN_EMAIL rather than a free-typed name.
+//
+// Rows still carrying editor_name = SEED_EDITOR_NAME are the original seeded
+// baseline (scripts/seed-public-holidays.ts) and have never been touched by
+// a dashboard user — PATCH/DELETE refuse to touch them, so the seed data
+// can't be edited or deleted from here. Only rows a user has already added
+// or edited (editor_name = EDITOR_NAME) can be further edited/deleted.
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
+import { SEED_EDITOR_NAME } from "../../../lib/publicHolidays";
 
 const EDITOR_NAME = process.env.DASHBOARD_LOGIN_EMAIL || "dashboard";
 
@@ -42,6 +49,22 @@ function toApiRow(row: any) {
     lastUpdated: row.last_updated,
     editorName: row.editor_name,
   };
+}
+
+// Returns an error message if the row can't be edited/deleted (seeded and
+// never touched by a user, or not found), or null if it's editable.
+async function checkEditable(id: string): Promise<{ status: number; error: string } | null> {
+  const { data, error } = await supabaseAdmin()
+    .from("public_holidays")
+    .select("editor_name")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return { status: 404, error: "Holiday not found" };
+  if ((data as any).editor_name === SEED_EDITOR_NAME) {
+    return { status: 403, error: "This is a seeded default holiday and can't be edited or deleted here" };
+  }
+  return null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -131,6 +154,9 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
   if (name !== undefined) patch.name = name.trim();
 
   try {
+    const lockError = await checkEditable(id);
+    if (lockError) return res.status(lockError.status).json({ error: lockError.error });
+
     const { data, error } = await (supabaseAdmin().from("public_holidays") as any)
       .update(patch)
       .eq("id", id)
@@ -154,6 +180,9 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse) {
   if (typeof id !== "string") return res.status(400).json({ error: "id is required" });
 
   try {
+    const lockError = await checkEditable(id);
+    if (lockError) return res.status(lockError.status).json({ error: lockError.error });
+
     const { error } = await supabaseAdmin().from("public_holidays").delete().eq("id", id);
     if (error) throw new Error(error.message);
     return res.status(200).json({ success: true });

@@ -9,6 +9,12 @@
 import { supabaseAdmin } from "./supabaseAdmin";
 import type { HolidayCountryCode } from "./categories";
 
+// editor_name value stamped by scripts/seed-public-holidays.ts. Rows still
+// carrying this value have never been touched by a dashboard user — the
+// dashboard API (pages/api/dashboard/holidays.ts) refuses to edit/delete
+// them, so the seeded baseline can't be accidentally modified there.
+export const SEED_EDITOR_NAME = "seed:date-holidays";
+
 // Singapore and Malaysia are both UTC+8 year-round (no DST) — "today" for
 // the holiday check is computed in this fixed offset regardless of where
 // the cron function actually runs.

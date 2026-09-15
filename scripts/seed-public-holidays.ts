@@ -24,6 +24,7 @@
 //   npx tsx -r dotenv/config scripts/seed-public-holidays.ts dotenv_config_path=.env.local 2027 2029
 import Holidays from "date-holidays";
 import { supabaseAdmin } from "../lib/supabaseAdmin";
+import { SEED_EDITOR_NAME } from "../lib/publicHolidays";
 
 const MY_STATE_KUALA_LUMPUR = "14";
 const COUNTRIES = ["SG", "MY"] as const;
@@ -73,7 +74,7 @@ async function main() {
     holiday_date: r.holiday_date,
     name: r.names.join(" / "),
     last_updated: now,
-    editor_name: "seed:date-holidays",
+    editor_name: SEED_EDITOR_NAME,
   }));
 
   console.log(`Upserting ${rows.length} holiday rows...`);

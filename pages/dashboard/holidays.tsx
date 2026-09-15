@@ -7,15 +7,23 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { ToastStack, type ToastKind } from "../../components/ui/toast";
 import { InfoTooltip } from "../../components/info-tooltip";
 import { TooltipProvider } from "../../components/ui/tooltip";
+import { Badge } from "../../components/ui/badge";
 
 const COUNTRY_OPTIONS = ["SG", "MY"] as const;
 const VIEW_TABS = ["ALL", "SG", "MY"] as const;
 type ViewTab = (typeof VIEW_TABS)[number];
 
+// Must match lib/publicHolidays.ts SEED_EDITOR_NAME — rows still carrying
+// this value are the original seeded baseline and are locked read-only here
+// (enforced server-side too, in pages/api/dashboard/holidays.ts).
+const SEED_EDITOR_NAME = "seed:date-holidays";
+
 const PAGE_INFO = [
   "Backs the public-holiday In-Office automation (Vercel Cron, daily, at noon SGT/MYT).",
   "On a date listed here, every member of that country's UiPath group (ECICS - SG (BS) / ECICS - MY (BS)) gets In Office switched off automatically — but never switched back on.",
+  "If SG and MY are both a holiday on the same date, In Office is left unchanged for both that day.",
   "Use \"Run update now\" below to trigger the same check on demand, e.g. right after adding a holiday dated today, instead of waiting for the daily cron tick.",
+  "Rows marked \"Seeded — locked\" are the original baseline data and can't be edited or deleted — only holidays a user has added can be changed.",
 ].join("\n");
 
 type Holiday = {
@@ -36,6 +44,7 @@ type CountryRunResult = {
   groupMemberCount?: number;
   updatedCount: number;
   newRowCount: number;
+  skippedReason?: string;
 };
 
 type RunResult = { date: string; sg: CountryRunResult; my: CountryRunResult };
@@ -166,10 +175,11 @@ export default function HolidaysPage() {
       if (data.error) throw new Error(data.error);
       const result: RunResult = data;
       setLastRun(result);
-      const summarize = (country: string, r: CountryRunResult) =>
-        r.isHoliday
-          ? `${country}: holiday (${r.holidayName}) — ${r.updatedCount} updated, ${r.newRowCount} new row(s)`
-          : `${country}: not a holiday`;
+      const summarize = (country: string, r: CountryRunResult) => {
+        if (!r.isHoliday) return `${country}: not a holiday`;
+        if (r.skippedReason) return `${country}: holiday (${r.holidayName}) — skipped, overlaps with the other country`;
+        return `${country}: holiday (${r.holidayName}) — ${r.updatedCount} updated, ${r.newRowCount} new row(s)`;
+      };
       pushToast(`Ran for ${result.date}. ${summarize("SG", result.sg)}. ${summarize("MY", result.my)}.`, "info");
     } catch (err: any) {
       pushToast(err?.message || "Failed to run update", "error");
@@ -242,13 +252,15 @@ export default function HolidaysPage() {
               return (
                 <p key={key}>
                   <span className="font-medium text-foreground">{label}:</span>{" "}
-                  {r.isHoliday ? (
+                  {!r.isHoliday ? (
+                    "not a holiday, nothing changed"
+                  ) : r.skippedReason ? (
+                    <>holiday ({r.holidayName}) — {r.skippedReason}</>
+                  ) : (
                     <>
                       holiday ({r.holidayName}) via {r.groupName} ({r.groupMemberCount} members) —{" "}
                       {r.updatedCount} updated, {r.newRowCount} new row(s)
                     </>
-                  ) : (
-                    "not a holiday, nothing changed"
                   )}
                 </p>
               );
@@ -293,12 +305,15 @@ export default function HolidaysPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visibleRows.map((row) => (
-                <TableRow key={row.id}>
+              {visibleRows.map((row) => {
+                const locked = row.editorName === SEED_EDITOR_NAME;
+                return (
+                <TableRow key={row.id} className={locked ? "bg-muted/40" : undefined}>
                   <TableCell className="w-24">
                     <Select
                       value={row.countryCode}
                       onValueChange={(v) => updateRow(row.id, { countryCode: v })}
+                      disabled={locked}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -317,32 +332,44 @@ export default function HolidaysPage() {
                       type="date"
                       value={row.date}
                       onChange={(e) => updateRow(row.id, { date: e.target.value })}
+                      disabled={locked}
                     />
                   </TableCell>
                   <TableCell className="min-w-[200px]">
-                    <Input value={row.name} onChange={(e) => updateRow(row.id, { name: e.target.value })} />
+                    <Input
+                      value={row.name}
+                      onChange={(e) => updateRow(row.id, { name: e.target.value })}
+                      disabled={locked}
+                    />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(row.lastUpdated).toLocaleString()}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{row.editorName || "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {locked ? (
+                      <Badge variant="secondary">Seeded — locked</Badge>
+                    ) : (
+                      row.editorName || "—"
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button
                         size="sm"
                         variant={row.dirty ? "default" : "outline"}
-                        disabled={!row.dirty || row.saving}
+                        disabled={locked || !row.dirty || row.saving}
                         onClick={() => saveRow(row)}
                       >
                         {row.saving ? "Saving..." : "Save"}
                       </Button>
-                      <Button size="sm" variant="destructive" onClick={() => deleteRow(row)}>
+                      <Button size="sm" variant="destructive" disabled={locked} onClick={() => deleteRow(row)}>
                         Delete
                       </Button>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>
