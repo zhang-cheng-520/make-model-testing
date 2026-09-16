@@ -224,22 +224,11 @@ export async function getOrchestratorUserById(userId: number): Promise<Orchestra
   };
 }
 
-// Best-effort fetch of the task's Data payload (case data set by whatever
-// created the task) for cross-checking caseId/directoryId. Not part of the
-// already-proven $select set above — the classic per-folder entity is tried
-// only now that OrganizationUnitId is known, and any failure here (field not
-// projectable, permissions, etc.) degrades to "unavailable" rather than
-// throwing, since callers treat missing Data as "couldn't verify," not as an
-// error — see caller for how that's treated for caseId vs directoryId.
-export async function getTaskDataById(taskId: number, organizationUnitId: number): Promise<unknown | null> {
-  try {
-    const url = `${orchestratorBase()}/odata/Tasks(${taskId})?$select=Data`;
-    const data = await uiGet<{ Data?: unknown }>(url, {
-      "X-UIPATH-OrganizationUnitId": String(organizationUnitId),
-    });
-    return data?.Data ?? null;
-  } catch (err) {
-    console.error(`getTaskDataById(${taskId}) best-effort fetch failed:`, (err as any)?.message || err);
-    return null;
-  }
-}
+// NOTE: an earlier getTaskDataById(taskId, organizationUnitId) helper lived
+// here, fetching `odata/Tasks({id})?$select=Data` to cross-check caseId/
+// directoryId against the task's case data. Removed — confirmed by direct
+// testing against a real task that `Data` is not a valid property on
+// UiPath's TaskDto ("Could not find a property named 'Data' on type ...
+// TaskDto", HTTP 400 on every call), so it could never have returned
+// anything. ca-request-reassignment.ts no longer corroborates caseId against
+// UiPath task data for the same reason.

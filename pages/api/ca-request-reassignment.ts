@@ -9,6 +9,9 @@
 // Contract:
 //   POST /api/ca-request-reassignment
 //   body: { taskId: number, caseId: string, directoryId?: string, taskTitle?: string, reason: string }
+//     (directoryId/taskTitle are accepted for forward-compatibility with the
+//     Coded App's payload but not otherwise used — see the caseId/directoryId
+//     note below)
 //   -> 200 {
 //        success: true, caseId, taskId,
 //        requestedBy: { id, email?, name? },
@@ -33,28 +36,29 @@
 //     other ca-* route in this repo already operates in) — this is what
 //     stops the endpoint being used to reassign arbitrary unrelated Action
 //     Center tasks elsewhere in the tenant
-//   - caseId must actually appear in that task's own data or title — not
-//     just be whatever string the caller sent
 // None of this requires the caller to hold a secret. targetAssignee/userId/
 // groupName are never accepted — see resolveCaseAssigner() below.
 //
-// `directoryId` (if sent) is the Coded App's fileAI case-directory id (see
-// pages/api/ca-fileai-preview.ts) — an unrelated concept to Orchestrator's
-// folder/OrganizationUnitId. If present, it's checked against the task's
-// Data payload when that payload is available; not used for the UiPath
-// folder scoping itself (CA_FOLDER_ID is, see above).
+// caseId/directoryId are recorded (in the response and the task comment) but
+// NOT cross-checked against the UiPath task — confirmed by direct testing
+// that UiPath's Task entity has no field for either (`$select=Data` 400s
+// with "Could not find a property named 'Data' on type ... TaskDto", and the
+// task's Title is arbitrary business text like "Motor - Renewal" with no
+// guaranteed relationship to a caseId). Requiring a match against a field
+// that doesn't exist would reject every legitimate request, not just
+// malicious ones, so taskId + folder ownership (both real UiPath fields) are
+// the actual protection here, not caseId corroboration.
 //
 // Ordering: 1) validate the payload shape, 2) validate the task itself
-// against live UiPath data (exists, active, correct folder, caseId
-// corroborated), 3) retrieve its real current assignee (reject if
-// unassigned), 4) resolve the Case Assigner, 5) reassign the task in
-// Orchestrator, 6) add the reason (+ requestedBy) as a task comment,
-// 7) respond. If any of 1-5 fails, nothing is written. If step 6 fails
-// after step 5 succeeds, the response says so explicitly
-// (reassignmentSucceeded: true, commentAdded: false) rather than rolling
-// back the reassignment (Orchestrator has no documented "undo" for this,
-// and guessing one would risk exactly the kind of speculative write this
-// endpoint is meant to avoid).
+// against live UiPath data (exists, active, correct folder), 3) retrieve its
+// real current assignee (reject if unassigned), 4) resolve the Case
+// Assigner, 5) reassign the task in Orchestrator, 6) add the reason
+// (+ requestedBy) as a task comment, 7) respond. If any of 1-5 fails,
+// nothing is written. If step 6 fails after step 5 succeeds, the response
+// says so explicitly (reassignmentSucceeded: true, commentAdded: false)
+// rather than rolling back the reassignment (Orchestrator has no documented
+// "undo" for this, and guessing one would risk exactly the kind of
+// speculative write this endpoint is meant to avoid).
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import {
@@ -63,7 +67,6 @@ import {
   getOrchestratorUserById,
   getResolvedGroupMembers,
   getTaskCoreById,
-  getTaskDataById,
   reassignTask,
 } from "../../lib/uipath";
 
@@ -85,20 +88,20 @@ function parseTaskId(value: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-// Deliberately permissive about *where* in the task's own data a value shows
-// up (a nested caseObject, a differently-cased key, ...) but strict about
-// requiring it to show up *somewhere* — see file header on why this is the
-// strongest practical check without a documented case-data schema to rely on.
-function taskDataContains(data: unknown, needle: string): boolean {
-  if (!needle) return false;
-  try {
-    return JSON.stringify(data ?? {}).toLowerCase().includes(needle.toLowerCase());
-  } catch {
-    return false;
-  }
+// Same CORS pattern as the other ca-* endpoints called from the UiPath
+// Action Center iframe (pages/api/ca-orchestrator-attachment.ts,
+// pages/api/ca-fileai-preview.ts) — the iframe's POST is preceded by a
+// browser CORS preflight (OPTIONS), which must succeed before the browser
+// will even attempt the actual POST.
+function setCors(res: NextApiResponse) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  setCors(res);
+  if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
 
   if (CA_REASSIGN_SECRET && req.headers.authorization !== `Bearer ${CA_REASSIGN_SECRET}`) {
@@ -136,8 +139,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const caseId = typeof body.caseId === "string" ? body.caseId.trim() : "";
   if (!caseId) return res.status(400).json({ error: "caseId is required" });
 
-  const directoryId = typeof body.directoryId === "string" ? body.directoryId.trim() : "";
-
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (!reason) return res.status(400).json({ error: "reason is required" });
   if (reason.length > MAX_REASON_LENGTH) {
@@ -163,27 +164,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (String(task.OrganizationUnitId) !== String(CA_FOLDER_ID)) {
       return res.status(403).json({
         error: `Task ${taskId} does not belong to the Case Assignment folder (expected folder ${CA_FOLDER_ID}, task is in ${task.OrganizationUnitId})`,
-      });
-    }
-
-    // caseId must be corroborated by the task's own data/title — never
-    // trusted purely because the caller sent it.
-    const taskData = await getTaskDataById(taskId, task.OrganizationUnitId);
-    const caseIdConfirmed =
-      taskDataContains(taskData, caseId) || (task.Title || "").toLowerCase().includes(caseId.toLowerCase());
-    if (!caseIdConfirmed) {
-      return res.status(409).json({
-        error: `caseId "${caseId}" could not be verified against task ${taskId}'s data or title`,
-      });
-    }
-
-    // directoryId is a softer check per the brief ("validate ... if that
-    // field is available") — only enforced when we actually have task data
-    // to check it against; otherwise it's left unverified rather than
-    // blocking a legitimate request on a field we simply couldn't inspect.
-    if (directoryId && taskData !== null && !taskDataContains(taskData, directoryId)) {
-      return res.status(409).json({
-        error: `directoryId "${directoryId}" could not be verified against task ${taskId}'s data`,
       });
     }
 
