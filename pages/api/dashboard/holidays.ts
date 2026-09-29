@@ -9,8 +9,26 @@
 //   GET    /api/dashboard/holidays[?year=2026]
 //     -> 200 { holidays: [{ id, countryCode, date, name, lastUpdated, editorName }] }
 //   POST   /api/dashboard/holidays        body: { countryCode, date, name }
+//     -> 200 { holiday, refresh: HolidayStatusRefreshResult }
 //   PATCH  /api/dashboard/holidays        body: { id, countryCode?, date?, name? }
+//     -> 200 { holiday, refresh: HolidayStatusRefreshResult }
 //   DELETE /api/dashboard/holidays?id=...
+//     -> 200 { success: true, refresh: HolidayStatusRefreshResult }
+//
+// Every write here that could change today's status (add, edit, delete)
+// immediately calls lib/dailyStatusRefresh.ts's runHolidayStatusRefresh() —
+// ALWAYS both countries, never just the one that was directly edited. This
+// is required, not just convenient: each country's correct value depends on
+// BOTH countries' holiday status jointly (that's how "both-side PH" is
+// detected), so e.g. adding an MY holiday on a day SG already has one can
+// change SG's correct value too (false/"SG Public Holiday" -> true/"SG + MY
+// Public Holiday") even though SG's own row wasn't touched. Refreshing only
+// the edited row's country was a real bug — see git history. No blanket
+// reset — same as runHolidayStatusRefresh() always. If the refresh step
+// itself fails, the CRUD write still succeeds (it already committed) and the
+// response carries refreshError instead, same pattern as
+// ca-request-reassignment.ts not rolling back a successful write when a
+// secondary step fails.
 //
 // editor_name is not client-supplied — v1 login is one shared account (no
 // per-user identity, same limitation as user_metadata.updated_by, see
@@ -26,11 +44,23 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { SEED_EDITOR_NAME } from "../../../lib/publicHolidays";
+import { runHolidayStatusRefresh, type HolidayStatusRefreshResult } from "../../../lib/dailyStatusRefresh";
 
 const EDITOR_NAME = process.env.DASHBOARD_LOGIN_EMAIL || "dashboard";
 
 const COUNTRY_CODES = ["SG", "MY"] as const;
 type CountryCode = (typeof COUNTRY_CODES)[number];
+
+// Best-effort — a refresh failure never rolls back the already-committed
+// CRUD write (see file header). Returns either the result or an error string.
+async function tryRefreshBoth(): Promise<{ result?: HolidayStatusRefreshResult; error?: string }> {
+  try {
+    return { result: await runHolidayStatusRefresh() };
+  } catch (err: any) {
+    console.error("dashboard/holidays: runHolidayStatusRefresh failed:", err?.message || err);
+    return { error: String(err?.message || err) };
+  }
+}
 
 function isCountryCode(v: unknown): v is CountryCode {
   return typeof v === "string" && (COUNTRY_CODES as readonly string[]).includes(v);
@@ -51,8 +81,8 @@ function toApiRow(row: any) {
   };
 }
 
-// Returns an error message if the row can't be edited/deleted (seeded and
-// never touched by a user, or not found), or null if it's editable.
+// Returns an error to send back if the row can't be edited/deleted (seeded
+// and never touched by a user, or not found), or null if it's editable.
 async function checkEditable(id: string): Promise<{ status: number; error: string } | null> {
   const { data, error } = await supabaseAdmin()
     .from("public_holidays")
@@ -126,7 +156,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       }
       throw new Error(error.message);
     }
-    return res.status(200).json({ holiday: toApiRow(data) });
+    const { result: refresh, error: refreshError } = await tryRefreshBoth();
+    return res.status(200).json({ holiday: toApiRow(data), refresh, ...(refreshError ? { refreshError } : {}) });
   } catch (err: any) {
     console.error("dashboard/holidays POST error:", err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });
@@ -168,7 +199,9 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
       }
       throw new Error(error.message);
     }
-    return res.status(200).json({ holiday: toApiRow(data) });
+
+    const { result: refresh, error: refreshError } = await tryRefreshBoth();
+    return res.status(200).json({ holiday: toApiRow(data), refresh, ...(refreshError ? { refreshError } : {}) });
   } catch (err: any) {
     console.error("dashboard/holidays PATCH error:", err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });
@@ -185,7 +218,9 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse) {
 
     const { error } = await supabaseAdmin().from("public_holidays").delete().eq("id", id);
     if (error) throw new Error(error.message);
-    return res.status(200).json({ success: true });
+
+    const { result: refresh, error: refreshError } = await tryRefreshBoth();
+    return res.status(200).json({ success: true, refresh, ...(refreshError ? { refreshError } : {}) });
   } catch (err: any) {
     console.error("dashboard/holidays DELETE error:", err?.message || err);
     return res.status(500).json({ error: String(err?.message || err) });

@@ -19,10 +19,12 @@ type ViewTab = (typeof VIEW_TABS)[number];
 const SEED_EDITOR_NAME = "seed:date-holidays";
 
 const PAGE_INFO = [
-  "Backs the public-holiday In-Office automation (Vercel Cron, daily, at noon SGT/MYT).",
-  "On a date listed here, every member of that country's UiPath group (ECICS - SG (BS) / ECICS - MY (BS)) gets In Office switched off automatically — but never switched back on.",
-  "If SG and MY are both a holiday on the same date, In Office is left unchanged for both that day.",
-  "Use \"Run update now\" below to trigger the same check on demand, e.g. right after adding a holiday dated today, instead of waiting for the daily cron tick.",
+  "Only affects members of ECICS - SG (BS) / ECICS - MY (BS) — never any other user (e.g. rpauser), and never a blanket reset of the whole status table.",
+  "Adding, editing, or deleting a holiday here immediately recalculates In Office status for just that country's group.",
+  "\"Run update now\" recalculates both countries the same way, on demand — good right after a change, or just to double-check today's state. It does NOT reset anyone first; it directly computes each managed user's correct value.",
+  "Priority for every managed user, always: active LOA (LOA Management) beats Public Holiday, which beats Normal. On a date listed here, that country's group is set to In Office = false, reason = \"<Country> Public Holiday\" — unless they have active LOA today, in which case LOA wins.",
+  "If SG and MY are both a holiday on the same date, both sides stay In Office = true, with reason \"SG + MY Public Holiday\".",
+  "The scheduled 00:00 SGT/MYT job is different from both of the above: it's the only thing that resets managed users to In Office / Normal first, before reapplying holidays and LOA — so any same-day manual In Office change is only an override until that next reset.",
   "Rows marked \"Seeded — locked\" are the original baseline data and can't be edited or deleted — only holidays a user has added can be changed.",
 ].join("\n");
 
@@ -37,17 +39,30 @@ type Holiday = {
 
 type Row = Holiday & { dirty: boolean; saving: boolean };
 
-type CountryRunResult = {
+type LoaRunResult = { activeCount: number; updatedCount: number; newRowCount: number };
+
+// Result of a scoped, single-country refresh (refreshCountryStatus, lib/dailyStatusRefresh.ts)
+// — the shape returned both by POST/PATCH/DELETE on this page (pages/api/dashboard/holidays.ts)
+// and by "Run update now" (pages/api/dashboard/holidays/run.ts -> runHolidayStatusRefresh,
+// which is just this run for both countries at once).
+type CountryRefreshResult = {
+  country: string;
   isHoliday: boolean;
   holidayName?: string;
-  groupName?: string;
-  groupMemberCount?: number;
+  groupMemberCount: number;
   updatedCount: number;
   newRowCount: number;
-  skippedReason?: string;
+  loa: LoaRunResult;
 };
 
-type RunResult = { date: string; sg: CountryRunResult; my: CountryRunResult };
+type HolidayStatusRunResult = { date: string; sg: CountryRefreshResult; my: CountryRefreshResult };
+
+function summarizeRefresh(r: CountryRefreshResult): string {
+  const status = r.isHoliday
+    ? `holiday (${r.holidayName}) — ${r.updatedCount} updated, ${r.newRowCount} new row(s)`
+    : `not a holiday — set to In Office / Normal (${r.updatedCount} updated, ${r.newRowCount} new row(s))`;
+  return `${r.country}: ${status}. LOA: ${r.loa.activeCount} active, ${r.loa.updatedCount} updated.`;
+}
 
 let nextToastId = 1;
 
@@ -63,7 +78,7 @@ export default function HolidaysPage() {
   const [adding, setAdding] = useState(false);
   const [viewTab, setViewTab] = useState<ViewTab>("ALL");
   const [running, setRunning] = useState(false);
-  const [lastRun, setLastRun] = useState<RunResult | null>(null);
+  const [lastRun, setLastRun] = useState<HolidayStatusRunResult | null>(null);
 
   useEffect(() => {
     loadHolidays();
@@ -116,7 +131,13 @@ export default function HolidaysPage() {
       setRows((prev) =>
         prev.map((r) => (r.id === row.id ? { ...data.holiday, dirty: false, saving: false } : r))
       );
-      pushToast(`Saved ${row.countryCode} ${row.date}.`, "success");
+      const refresh: HolidayStatusRunResult | undefined = data.refresh;
+      if (refresh) setLastRun(refresh);
+      pushToast(
+        `Saved ${row.countryCode} ${row.date}. ${refresh ? `${summarizeRefresh(refresh.sg)} ${summarizeRefresh(refresh.my)}` : ""}`,
+        "success"
+      );
+      if (data.refreshError) pushToast(`Refresh failed: ${data.refreshError}`, "error");
     } catch (err: any) {
       pushToast(err?.message || "Failed to save", "error");
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, saving: false } : r)));
@@ -130,7 +151,13 @@ export default function HolidaysPage() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setRows((prev) => prev.filter((r) => r.id !== row.id));
-      pushToast(`Deleted ${row.countryCode} ${row.date}.`, "info");
+      const refresh: HolidayStatusRunResult | undefined = data.refresh;
+      if (refresh) setLastRun(refresh);
+      pushToast(
+        `Deleted ${row.countryCode} ${row.date}. ${refresh ? `${summarizeRefresh(refresh.sg)} ${summarizeRefresh(refresh.my)}` : ""}`,
+        "info"
+      );
+      if (data.refreshError) pushToast(`Refresh failed: ${data.refreshError}`, "error");
     } catch (err: any) {
       pushToast(err?.message || "Failed to delete", "error");
     }
@@ -156,10 +183,13 @@ export default function HolidaysPage() {
       );
       setNewDate("");
       setNewName("");
-      pushToast(`Added ${newCountry} ${holiday.date}.`, "success");
-      // Test aid: immediately run the same sweep the daily cron does, so the
-      // effect of a just-added holiday (e.g. dated today) is visible right away.
-      await runUpdateNow();
+      const refresh: HolidayStatusRunResult | undefined = data.refresh;
+      if (refresh) setLastRun(refresh);
+      pushToast(
+        `Added ${newCountry} ${holiday.date}. ${refresh ? `${summarizeRefresh(refresh.sg)} ${summarizeRefresh(refresh.my)}` : ""}`,
+        "success"
+      );
+      if (data.refreshError) pushToast(`Refresh failed: ${data.refreshError}`, "error");
     } catch (err: any) {
       pushToast(err?.message || "Failed to add holiday", "error");
     } finally {
@@ -173,14 +203,9 @@ export default function HolidaysPage() {
       const res = await fetch("/api/dashboard/holidays/run", { method: "POST" });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      const result: RunResult = data;
+      const result: HolidayStatusRunResult = data;
       setLastRun(result);
-      const summarize = (country: string, r: CountryRunResult) => {
-        if (!r.isHoliday) return `${country}: not a holiday`;
-        if (r.skippedReason) return `${country}: holiday (${r.holidayName}) — skipped, overlaps with the other country`;
-        return `${country}: holiday (${r.holidayName}) — ${r.updatedCount} updated, ${r.newRowCount} new row(s)`;
-      };
-      pushToast(`Ran for ${result.date}. ${summarize("SG", result.sg)}. ${summarize("MY", result.my)}.`, "info");
+      pushToast(`Ran for ${result.date}. ${summarizeRefresh(result.sg)} ${summarizeRefresh(result.my)}`, "info");
     } catch (err: any) {
       pushToast(err?.message || "Failed to run update", "error");
     } finally {
@@ -238,7 +263,9 @@ export default function HolidaysPage() {
           {running ? "Running..." : "Run update now"}
         </Button>
         <span className="text-sm text-muted-foreground">
-          Runs the same daily check immediately — good for testing after adding a holiday dated today.
+          Recalculates both countries' managed users right now (LOA {">"} Public Holiday {">"} Normal) — no reset,
+          no effect on anyone outside ECICS - SG (BS) / ECICS - MY (BS). Adding/editing/deleting a holiday above
+          already does this for that one country automatically.
         </span>
       </div>
 
@@ -246,25 +273,9 @@ export default function HolidaysPage() {
         <div className="mb-6 rounded-lg border p-4 text-sm">
           <p className="mb-2 font-medium">Last run — {lastRun.date}</p>
           <div className="grid gap-1 text-muted-foreground">
-            {(["sg", "my"] as const).map((key) => {
-              const r = lastRun[key];
-              const label = key.toUpperCase();
-              return (
-                <p key={key}>
-                  <span className="font-medium text-foreground">{label}:</span>{" "}
-                  {!r.isHoliday ? (
-                    "not a holiday, nothing changed"
-                  ) : r.skippedReason ? (
-                    <>holiday ({r.holidayName}) — {r.skippedReason}</>
-                  ) : (
-                    <>
-                      holiday ({r.holidayName}) via {r.groupName} ({r.groupMemberCount} members) —{" "}
-                      {r.updatedCount} updated, {r.newRowCount} new row(s)
-                    </>
-                  )}
-                </p>
-              );
-            })}
+            {(["sg", "my"] as const).map((key) => (
+              <p key={key}>{summarizeRefresh(lastRun[key])}</p>
+            ))}
           </div>
         </div>
       )}
