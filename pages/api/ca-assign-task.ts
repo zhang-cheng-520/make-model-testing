@@ -7,9 +7,17 @@
 //
 // In-office aware (from the HR Dashboard's Supabase user_metadata table):
 //   1. Only members marked "In Office" are eligible (default true if no row).
-//   2. If nobody in the requested group is in office, fall back to the
-//      "Case Assigners" group and apply the same in-office + workload logic.
-//   3. If nobody in "Case Assigners" is in office either, pick a random
+//      This is a pure boolean check — it never looks at *why* someone is
+//      marked out (public holiday, LOA, medical leave, manual override all
+//      look identical here), so the same fallback chain below covers all of
+//      them uniformly.
+//   2. If nobody in the requested group is in office, fall back to that
+//      group's paired group (PAIRED_GROUP_BY_NAME below) and apply the same
+//      in-office + workload logic there.
+//   3. If nobody in the paired group is in office either (or no pairing is
+//      defined for the requested group), fall back to the "Case Assigners"
+//      group, same logic again.
+//   4. If nobody in "Case Assigners" is in office either, pick a random
 //      member from "Case Assigners" (workload ignored at that point).
 //
 // Contract:
@@ -35,6 +43,24 @@ const CA_ORCHESTRATOR_PAT = process.env.CA_ORCHESTRATOR_PAT || "";
 const CA_IDENTITY_ORG_ID = process.env.CA_IDENTITY_ORG_ID || "";
 
 const FALLBACK_GROUP_NAME = "Case Assigners";
+
+// Second-tier fallback, tried before Case Assigners, when the primary
+// requested group has no in-office member. Matched case-insensitively on the
+// requested `groupName` (not the resolved Identity group id) since pairing
+// is a static naming relationship, independent of PH/LOA/manual status.
+const PAIRED_GROUP_BY_NAME: Record<string, string> = {
+  "ecics - sg (bs)": "ECICS - MY (BS)",
+  "ecics - my (bs)": "ECICS - SG (BS)",
+  // Confirmed against live UiPath Identity groups (GET /api/dashboard/groups)
+  // — the real names follow the same "ECICS - X (BS)" convention as SG/MY,
+  // not the bare "IPP"/"Single Deduction" shorthand.
+  "ecics - ipp (bs)": "ECICS - Single Deduction (BS)",
+  "ecics - single deduction (bs)": "ECICS - IPP (BS)",
+};
+
+function pairedGroupName(groupName: string): string | null {
+  return PAIRED_GROUP_BY_NAME[groupName.trim().toLowerCase()] || null;
+}
 
 function identityBase() {
   return `https://cloud.uipath.com/${CA_ORG}/identity_`;
@@ -298,11 +324,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let candidatesToUse: Candidate[] = pool.inOfficeCandidates;
     let sourceGroupName = groupName;
     let sourceGroupId = group.id;
-    let fallback: "none" | "case-assigners" | "case-assigners-random" = "none";
+    let fallback: "none" | "paired-group" | "case-assigners" | "case-assigners-random" = "none";
 
     if (candidatesToUse.length === 0) {
-      // Nobody in the requested group is in office (or none matched an Orchestrator user)
-      // -> fall back to the "Case Assigners" group.
+      // Nobody in the requested group is in office -> try its paired group
+      // (e.g. SG <-> MY, IPP <-> Single Deduction) before Case Assigners.
+      const pairedName = pairedGroupName(groupName);
+      if (pairedName) {
+        const pairedGroup = await findGroupIdByName(pairedName);
+        if (pairedGroup) {
+          const pairedPool = await buildCandidatePool(pairedGroup.id);
+          if (pairedPool.inOfficeCandidates.length > 0) {
+            candidatesToUse = pairedPool.inOfficeCandidates;
+            sourceGroupName = pairedName;
+            sourceGroupId = pairedGroup.id;
+            fallback = "paired-group";
+          }
+        }
+      }
+    }
+
+    if (candidatesToUse.length === 0) {
+      // Nobody in the requested group (or its paired group) is in office
+      // (or none matched an Orchestrator user) -> fall back to "Case Assigners".
       const fallbackGroup = await findGroupIdByName(FALLBACK_GROUP_NAME);
       if (!fallbackGroup) {
         return res.status(404).json({

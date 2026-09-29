@@ -13,23 +13,30 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { TooltipProvider } from "../../components/ui/tooltip";
 import { CategoryPicker } from "../../components/category-picker";
 import { InfoTooltip } from "../../components/info-tooltip";
+import { IN_OFFICE_REASON_OPTIONS } from "../../lib/inOfficeReasons";
 
 const IN_OFFICE_INFO = [
-  "Drives automatic task routing: only members marked In Office are considered for the least-workload assignment in this group.",
-  "If nobody in this group is in office, tasks route to the \"Case Assigners\" group instead, applying the same logic there.",
-  "If nobody in Case Assigners is in office either, one member is picked at random as a last resort.",
+  "Drives automatic task routing: only members marked In Office are considered for the least-workload assignment in this group (falling back to the paired group, then Case Assigners, then a random pick — see docs/ca-assign-task-logic.md).",
+  "This is a same-day override only. The daily status refresh at 00:00 SGT/MYT always resets every user to In Office / Normal, then reapplies Public Holidays and LOA Management — it does not preserve manual edits made here.",
   "New members default to In Office until changed here.",
 ].join("\n");
 
 type Group = { id: string; name: string; displayName?: string };
 type Member = { identifier: string; email: string; name: string };
-type MetadataRow = { uipath_id: string; in_office: boolean; categories: string[]; updated_at: string };
+type MetadataRow = {
+  uipath_id: string;
+  in_office: boolean;
+  in_office_reason: string | null;
+  categories: string[];
+  updated_at: string;
+};
 
 type Row = {
   identifier: string;
   name: string;
   email: string;
   inOffice: boolean;
+  inOfficeReason: string;
   categories: string[];
   dirty: boolean;
   saving: boolean;
@@ -81,6 +88,7 @@ export default function DashboardPage() {
             name: m.name,
             email: m.email,
             inOffice: meta ? meta.in_office : true,
+            inOfficeReason: meta?.in_office_reason || "Normal",
             categories: meta?.categories || [],
             dirty: false,
             saving: false,
@@ -113,6 +121,7 @@ export default function DashboardPage() {
           uipathId: row.identifier,
           email: row.email,
           inOffice: row.inOffice,
+          inOfficeReason: row.inOfficeReason,
           categories: row.categories,
         }),
       });
@@ -175,6 +184,7 @@ export default function DashboardPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>In Office</TableHead>
+                <TableHead>Reason</TableHead>
                 <TableHead>Categories</TableHead>
                 <TableHead className="text-right">Save</TableHead>
               </TableRow>
@@ -187,8 +197,25 @@ export default function DashboardPage() {
                   <TableCell>
                     <Switch
                       checked={row.inOffice}
-                      onCheckedChange={(checked) => updateRow(row.identifier, { inOffice: checked })}
+                      onCheckedChange={(checked) => updateRow(row.identifier, { inOffice: checked, inOfficeReason: "Manual" })}
                     />
+                  </TableCell>
+                  <TableCell className="w-44">
+                    <Select
+                      value={row.inOfficeReason}
+                      onValueChange={(v) => updateRow(row.identifier, { inOfficeReason: v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {IN_OFFICE_REASON_OPTIONS.map((r) => (
+                          <SelectItem key={r} value={r}>
+                            {r}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </TableCell>
                   <TableCell className="min-w-[280px]">
                     <CategoryPicker

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { isValidCategory } from "../../../lib/categories";
+import { isValidInOfficeReason } from "../../../lib/inOfficeReasons";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "GET") return handleGet(req, res);
@@ -17,7 +18,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { data, error } = await supabaseAdmin()
       .from("user_metadata")
-      .select("uipath_id, in_office, categories, updated_at")
+      .select("uipath_id, in_office, in_office_reason, categories, updated_at")
       .in("uipath_id", ids);
     if (error) throw new Error(error.message);
     return res.status(200).json({ rows: data || [] });
@@ -27,12 +28,23 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-// PATCH { uipathId, email?, inOffice?, categories? }
+// PATCH { uipathId, email?, inOffice?, inOfficeReason?, categories? }
+//
+// inOffice and inOfficeReason are saved together in one call (the dashboard
+// UI always sends both when either changes) — this route doesn't infer one
+// from the other. inOfficeReason must be one of IN_OFFICE_REASON_OPTIONS;
+// the dashboard defaults it to "Manual" client-side when a manager flips the
+// switch, but the manager can pick a different reason before saving.
+//
+// This is a same-day override only: the next 00:00 daily status refresh
+// (lib/dailyStatusRefresh.ts) recalculates in_office/in_office_reason from
+// public_holidays + leave_periods and overwrites whatever is saved here.
 async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
-  const { uipathId, email, inOffice, categories } = (req.body || {}) as {
+  const { uipathId, email, inOffice, inOfficeReason, categories } = (req.body || {}) as {
     uipathId?: string;
     email?: string;
     inOffice?: boolean;
+    inOfficeReason?: string;
     categories?: string[];
   };
 
@@ -45,6 +57,10 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
+  if (inOfficeReason !== undefined && !isValidInOfficeReason(inOfficeReason)) {
+    return res.status(400).json({ error: `Invalid inOfficeReason: ${inOfficeReason}` });
+  }
+
   try {
     const row: Record<string, any> = {
       uipath_id: uipathId,
@@ -52,6 +68,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
     };
     if (email !== undefined) row.email = email;
     if (inOffice !== undefined) row.in_office = inOffice;
+    if (inOfficeReason !== undefined) row.in_office_reason = inOfficeReason;
     if (categories !== undefined) row.categories = categories;
 
     const { data, error } = await supabaseAdmin()
