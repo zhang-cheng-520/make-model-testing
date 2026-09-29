@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/trpa", label: "TRPA - Release+DebitNote" },
   { href: "/dashboard/holidays", label: "Public Holidays" },
+  { href: "/dashboard/leave", label: "Leave Management" },
 ];
 
 export function DashboardLayout({ children }: { children: ReactNode }) {
