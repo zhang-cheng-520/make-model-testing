@@ -6,7 +6,7 @@
 //
 // Contract:
 //   POST /api/dashboard/trpa-queue
-//   body: { policyNumbers: string[], status: string }
+//   body: { policyNumbers: string[], requestType: string }
 //   -> 200 { results: [{ policyNumber, success, id?, key?, error? }] }
 
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -28,16 +28,16 @@ type QueueItemResult = {
   error?: string;
 };
 
-async function addOne(policyNumber: string, status: string): Promise<QueueItemResult> {
+async function addOne(policyNumber: string, requestType: string): Promise<QueueItemResult> {
   const body = {
     itemData: {
       Name: "TRPA",
       Reference: policyNumber,
       SpecificContent: {
-        RequestType: "Release",
+        ProcessType: "Release",
+        RequestType: requestType,
         Payload: "Success",
         pol_number: policyNumber,
-        Status: status,
       },
     },
   };
@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  const { policyNumbers, status } = (req.body || {}) as { policyNumbers?: string[]; status?: string };
+  const { policyNumbers, requestType } = (req.body || {}) as { policyNumbers?: string[]; requestType?: string };
   if (!Array.isArray(policyNumbers) || policyNumbers.length === 0) {
     return res.status(400).json({ error: "policyNumbers must be a non-empty array" });
   }
@@ -80,10 +80,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (cleanNumbers.length === 0) {
     return res.status(400).json({ error: "No non-empty policy numbers provided" });
   }
-  const effectiveStatus = (status || "").trim() || "PROD M01 Release";
+  const effectiveRequestType = (requestType || "").trim() || "Manual - Bulk Release";
 
   try {
-    const results = await Promise.all(cleanNumbers.map((pol) => addOne(pol, effectiveStatus)));
+    const results = await Promise.all(cleanNumbers.map((pol) => addOne(pol, effectiveRequestType)));
     return res.status(200).json({ results });
   } catch (err: any) {
     console.error("trpa-queue unhandled error:", err?.message || err);

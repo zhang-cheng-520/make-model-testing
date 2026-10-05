@@ -33,7 +33,7 @@ function loadCachedResults(): QueueResult[] {
 
 export default function TrpaPage() {
   const [policyText, setPolicyText] = useState("");
-  const [status, setStatus] = useState("PROD M01 Release");
+  const [requestType, setRequestType] = useState("Manual - Bulk Release");
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<QueueResult[]>([]);
   const [toasts, setToasts] = useState<{ id: number; message: string; kind: ToastKind }[]>([]);
@@ -74,7 +74,7 @@ export default function TrpaPage() {
       const res = await fetch("/api/dashboard/trpa-queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ policyNumbers, status }),
+        body: JSON.stringify({ policyNumbers, requestType }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -124,8 +124,8 @@ export default function TrpaPage() {
         </label>
 
         <label className="grid gap-1.5">
-          <span className="text-sm font-medium">Status</span>
-          <Input value={status} onChange={(e) => setStatus(e.target.value)} disabled={submitting} />
+          <span className="text-sm font-medium">Request Type</span>
+          <Input value={requestType} onChange={(e) => setRequestType(e.target.value)} disabled={submitting} />
         </label>
 
         <Button onClick={submit} disabled={submitting || policyNumbers.length === 0}>
