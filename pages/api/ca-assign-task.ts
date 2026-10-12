@@ -89,7 +89,7 @@ async function uiGet<T>(url: string, extraHeaders?: Record<string, string>): Pro
 
 type IdentityGroup = { id: string; name: string; displayName?: string };
 
-async function findGroupIdByName(groupName: string): Promise<IdentityGroup | null> {
+export async function findGroupIdByName(groupName: string): Promise<IdentityGroup | null> {
   const url = `${identityBase()}/api/Group/${CA_IDENTITY_ORG_ID}`;
   const groups = await uiGet<IdentityGroup[]>(url);
   const needle = groupName.trim().toLowerCase();
@@ -123,7 +123,7 @@ async function getAllUsers(): Promise<OrchestratorUser[]> {
   return data.value || [];
 }
 
-type TaskItem = {
+export type TaskItem = {
   Id: number;
   AssignedToUserId: number | null;
   Status: string;
@@ -133,7 +133,7 @@ type TaskItem = {
   OrganizationUnitId: number;
 };
 
-async function getOpenTasksInFolder(folderId: string): Promise<TaskItem[]> {
+export async function getOpenTasksInFolder(folderId: string): Promise<TaskItem[]> {
   const base = `${orchestratorBase()}/odata/Tasks/UiPath.Server.Configuration.OData.GetTasksAcrossFoldersForAdmin`;
   const select = "Id,Status,IsCompleted,IsDeleted,CreationTime,AssignedToUserId,OrganizationUnitId";
   const filter = [`OrganizationUnitId eq ${folderId}`, `IsCompleted eq false`, `IsDeleted eq false`].join(" and ");
@@ -179,7 +179,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function acquireGroupLock(groupId: string): Promise<boolean> {
+export async function acquireGroupLock(groupId: string): Promise<boolean> {
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
   while (Date.now() < deadline) {
     const { data, error } = await (supabaseAdmin() as any).rpc("try_acquire_lock", {
@@ -195,12 +195,12 @@ async function acquireGroupLock(groupId: string): Promise<boolean> {
   return false;
 }
 
-async function releaseGroupLock(groupId: string): Promise<void> {
+export async function releaseGroupLock(groupId: string): Promise<void> {
   const { error } = await (supabaseAdmin() as any).rpc("release_lock", { p_group_id: groupId });
   if (error) console.error(`release_lock failed for ${groupId}:`, error.message);
 }
 
-async function getPendingCounts(groupId: string): Promise<Map<number, number>> {
+export async function getPendingCounts(groupId: string): Promise<Map<number, number>> {
   const cutoff = new Date(Date.now() - PENDING_RESERVATION_TTL_SECONDS * 1000).toISOString();
   // Best-effort cleanup of expired reservations so the table doesn't grow unbounded.
   await supabaseAdmin().from("pending_assignments").delete().lt("reserved_at", cutoff);
@@ -219,16 +219,16 @@ async function getPendingCounts(groupId: string): Promise<Map<number, number>> {
   return counts;
 }
 
-async function recordPendingAssignment(groupId: string, userId: number, email: string): Promise<void> {
+export async function recordPendingAssignment(groupId: string, userId: number, email: string): Promise<void> {
   const { error } = await supabaseAdmin()
     .from("pending_assignments")
     .insert({ group_id: groupId, user_id: userId, email } as any);
   if (error) console.error(`recordPendingAssignment failed for group ${groupId}, user ${userId}:`, error.message);
 }
 
-type Candidate = { identifier: string; email: string; name: string; userId: number };
+export type Candidate = { identifier: string; email: string; name: string; userId: number };
 
-async function buildCandidatePool(groupId: string): Promise<{ allCandidates: Candidate[]; inOfficeCandidates: Candidate[] }> {
+export async function buildCandidatePool(groupId: string): Promise<{ allCandidates: Candidate[]; inOfficeCandidates: Candidate[] }> {
   const [members, allUsers] = await Promise.all([getGroupMembers(groupId), getAllUsers()]);
   const userByKey = new Map(
     allUsers.filter((u) => u.Type === "DirectoryUser").map((u) => [u.Key.toLowerCase(), u])
@@ -255,7 +255,7 @@ function alphaName(a: string, b: string) {
   return a.localeCompare(b, "en", { sensitivity: "base" });
 }
 
-function pickLeastLoaded(
+export function pickLeastLoaded(
   candidates: Candidate[],
   tasks: TaskItem[],
   pendingCounts: Map<number, number>,
